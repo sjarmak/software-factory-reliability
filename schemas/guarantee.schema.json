@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://factory-reliability.example/schemas/guarantee.schema.json",
+  "title": "Reliability guarantee ledger entry",
+  "description": "One entry in a factory's guarantee ledger: a precise claim, the owner accountable for it, the mechanism that provides it, the oracle that would catch its violation, and the current evidence status. The ledger's ground rule: documentation alone never raises the status; only an enforcing mechanism in the running system, or a passing fault drill, does.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "claim", "owner", "mechanism", "oracle", "evidence"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9]*(-[A-Z0-9]+)*$",
+      "description": "Stable identifier of the guarantee, upper case with hyphens, for example AUTH-STALE-PUBLISH. Referenced from reviews, drills, and incident write-ups; never reused for a different claim."
+    },
+    "claim": {
+      "type": "string",
+      "minLength": 1,
+      "description": "A precise safety or liveness statement over the whole system, not over one component. 'The workflow engine recovers' is a component property; 'one logical work item has at most one authorized writer at a time' is a factory claim."
+    },
+    "owner": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Team or person accountable for keeping the claim true and for keeping its evidence current."
+    },
+    "mechanism": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "inputs"],
+      "description": "The mechanism that provides the guarantee, and the identities or facts it consumes. Naming the inputs makes it checkable that the mechanism sees the identities the claim is about.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Mechanism family, for example destination-fence, destination-deduplication, lease-and-generation, content-addressed-publication."
+        },
+        "inputs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "description": "One identity or fact the mechanism consumes, named as a field from the factory contract."
+          },
+          "description": "Identities and facts the mechanism consumes, for example [claim_generation, work_id]."
+        }
+      }
+    },
+    "oracle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "assertion"],
+      "description": "The check that would catch the claim being false. An oracle that cannot fail is not an oracle; where a negative control exists, the assertion states what the control is expected to do.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Check family, for example fault-drill, readback-comparison, invariant-monitor."
+        },
+        "assertion": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The machine-checkable condition, stated over observable facts: what must hold after the scenario runs, and what the negative control must violate when one exists."
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "description": "Current evidence backing the claim. Statuses only move up with evidence, and they decay: an enforced mechanism that was refactored, or a drill that has not run since the system changed, warrants demotion.",
+      "properties": {
+        "status": {
+          "enum": ["declared", "enforced", "fault-tested"],
+          "description": "declared: the claim is written down and nothing checks it. enforced: a mechanism in the running system rejects violations. fault-tested: a drill injected the fault, the oracle caught the violation on the negative control, and the protected arm passed."
+        },
+        "drill": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Path or name of the drill that exercises the fault. Expected for fault-tested entries; states exactly which failure was injected and where."
+        },
+        "last_verified": {
+          "type": "string",
+          "format": "date",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+          "description": "Absolute date (YYYY-MM-DD) the evidence was last produced or re-run. An old date is a prompt to re-drill, not a permanent credential."
+        },
+        "artifact": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Path to preserved evidence backing the status, for example an ordered event journal from the drill run. Evidence directories are append-only by convention."
+        }
+      }
+    }
+  }
+}

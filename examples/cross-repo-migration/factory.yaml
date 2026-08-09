@@ -1,0 +1,96 @@
+# Cross-repo-migration factory: a contract for fleet-wide code change
+# campaigns. The code_estate and campaigns sections carry the weight: targets
+# are pinned to repository@revision, in-flight work is visible through
+# manifests, and a campaign completes only when every currently known target
+# has an accountable disposition.
+
+version: factory.reliability/v1
+
+factory:
+  name: cross-repo-migration
+
+authorities:
+  facts:     { system: work-store, record: campaign_targets }
+  procedure: { system: workflow-engine }
+  policy:    { system: fleet-scheduler }
+  effects:   { system: migration-workers }
+
+work:
+  logical_identity: target_id       # one logical work item per campaign target
+  attempt_identity: attempt_id
+  session_identity: session_id
+  ownership:
+    generation: claim_generation
+    lease_expiry: claim_expires_at
+    fence:
+      enforced_by: publisher
+      operation: compare-and-set
+
+artifacts:
+  identity: commit_sha
+  verification:
+    identity: ci_run_id
+    binds_to: commit_sha
+  publication:
+    conditions:
+      - current_generation
+      - expected_base_revision      # migrations race with normal development;
+                                    # a moved base invalidates the prepared change
+      - verification_matches_artifact
+
+effects:
+  - name: create_pull_request
+    destination: code_host
+    effect_identity: pull_request_operation_id
+    retry_contract: reconcile
+    readback: find_by_head_reference
+    unknown_state_policy: block_and_escalate
+
+reconciliation:
+  - fact: pull_request_state
+    query: read_current_pull_request
+    interval: 5m
+  - fact: running_session
+    query: resolve_session_for_current_claim
+    interval: 1m
+  # Discovery drift: the estate keeps changing while the campaign runs, so the
+  # target set is re-derived on a cadence. New matches become new open targets;
+  # completion is judged over the current set, not the kickoff set.
+  - fact: campaign_target_set
+    query: rerun_discovery_against_latest_snapshot
+    interval: 1d
+
+scheduling:
+  capacity: { total: 100 }
+  classes:
+    interactive: { reserved: 10 }
+    ordinary:    { maximum: 60 }
+    recovery:    { maximum: 30 }
+  fairness:
+    # Repository sits in the fairness hierarchy so a campaign fanning out over
+    # hundreds of repositories cannot monopolize any single repository's
+    # review bandwidth, and tenant sits above it so one campaign cannot
+    # monopolize the factory.
+    levels: [tenant, repository, priority]
+
+code_estate:
+  canonical_identity: repository@revision
+  topology_provider: code-impact-adapter
+  in_flight_manifest: work-manifests/   # one manifest per in-flight target change;
+                                        # see campaign.yaml for the target ledger
+
+campaigns:
+  completion:
+    all_current_targets_have_disposition:
+      - published
+      - exempted
+      - blocked_with_owner
+
+observability:
+  promises:
+    - ready_to_claim
+    - claimed_to_started
+    - started_to_progress
+    - completed_to_verified
+    - verified_to_published
+    - published_to_acknowledged

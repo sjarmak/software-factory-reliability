@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://factory-reliability.example/schemas/effect.schema.json",
+  "title": "External effect declaration",
+  "description": "Standalone declaration of one class of external effect, matching the inline effect shape in the factory reliability contract. Use it where a full factory contract is not in scope, for example a single service documenting the retry behavior of its own outbound mutations. Procedure retries redeliver work, so every effect must state how the destination behaves when the same logical effect is attempted twice, and what the caller does when an attempt's outcome is unknown. The string \"unknown\" is accepted wherever a builder has not decided yet; review rules flag undecided values instead of the schema rejecting them.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "destination", "effect_identity", "retry_contract"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Name of the effect, for example create_pull_request."
+    },
+    "destination": {
+      "type": "string",
+      "minLength": 1,
+      "description": "External system the effect mutates, for example code_host or messaging. Use \"unknown\" if not yet decided."
+    },
+    "effect_identity": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable logical identity of one intended effect, carried unchanged across retries. If this identity embeds the attempt identity, every retry mints a new effect and deduplication becomes impossible; the review rules flag that pattern. Use \"unknown\" if not yet decided."
+    },
+    "retry_contract": {
+      "enum": ["deduplicate", "converge", "reconcile", "unknown"],
+      "description": "What holds when the same effect_identity is submitted more than once. deduplicate: the destination atomically stores the identity with the effect and returns the original receipt for repeats. converge: the operation is idempotent, so repeating it reaches the same final state. reconcile: the caller queries the destination for a prior effect (see readback) before repeating; weaker than destination deduplication, and it assumes callers for one identity are serialized. \"unknown\" records that the builder has not decided; the review rules flag it."
+    },
+    "readback": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Query used to find a previously applied effect at the destination, for example find_by_head_reference. Needed whenever retry_contract is reconcile; without it the caller cannot learn whether the prior attempt landed."
+    },
+    "unknown_state_policy": {
+      "enum": ["block_and_escalate", "reconcile_then_block", "manual_review", "unknown"],
+      "description": "What the caller does when an attempt's outcome cannot be determined (timeout, crash after send, lost response). Every allowed policy stops and surfaces the ambiguity: block_and_escalate, reconcile_then_block, manual_review. Assuming success or assuming failure are both unsound (one loses the effect, the other duplicates it) and are schema-invalid values. \"unknown\" records indecision. Optional at the schema level so partial contracts can be recorded; the review rules treat absence as a failure finding."
+    }
+  }
+}

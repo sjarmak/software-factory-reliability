@@ -1,0 +1,33 @@
+{"event":"work.discovered","ts":"2026-08-05T14:00:00Z","work_id":"wi-1001","repository":"billing-service","base_revision":"a1b2c3d4e5f6","tenant_id":"team-payments"}
+{"event":"work.ready","ts":"2026-08-05T14:00:05Z","work_id":"wi-1001","generation":1}
+{"event":"work.claimed","ts":"2026-08-05T14:00:12Z","work_id":"wi-1001","generation":1,"session_id":"sess-771","conflict_key":"billing-service/invoice-adapter"}
+{"event":"execution.started","ts":"2026-08-05T14:00:20Z","work_id":"wi-1001","generation":1,"attempt_id":1,"session_id":"sess-771","host_id":"host-03","base_revision":"a1b2c3d4e5f6","lane":"interactive","tenant_id":"team-payments"}
+{"event":"execution.progressed","ts":"2026-08-05T14:03:00Z","work_id":"wi-1001","generation":1,"attempt_id":1,"step":"failing-test-written"}
+{"event":"execution.progressed","ts":"2026-08-05T14:06:30Z","work_id":"wi-1001","generation":1,"attempt_id":1,"step":"implementation-in-progress"}
+{"event":"work.reconciled","ts":"2026-08-05T14:16:40Z","work_id":"wi-1001","generation":1,"action":"stalled_execution_detected","reason":"no progress event for 10m and worker process absent on host-03"}
+{"event":"execution.attached","ts":"2026-08-05T14:17:02Z","work_id":"wi-1001","generation":1,"attempt_id":2,"prior_attempt_id":1,"session_id":"sess-771","host_id":"host-04","lane":"recovery","tenant_id":"team-payments"}
+{"event":"execution.progressed","ts":"2026-08-05T14:20:00Z","work_id":"wi-1001","generation":1,"attempt_id":2,"step":"implementation-resumed-from-session-state"}
+{"event":"artifact.prepared","ts":"2026-08-05T14:31:00Z","work_id":"wi-1001","generation":1,"attempt_id":2,"artifact_digest":"sha256:9f2c41d8a07b55c3e6d1f0aa8b2c9d4e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c","base_revision":"a1b2c3d4e5f6","head_revision":"f9e8d7c6b5a4"}
+{"event":"effect.dispatched","ts":"2026-08-05T14:32:00Z","work_id":"wi-1001","generation":1,"attempt_id":2,"effect_id":"eff-8801"}
+{"event":"effect.committed","ts":"2026-08-05T14:32:04Z","work_id":"wi-1001","generation":1,"effect_id":"eff-8801","receipt":"remote-push-9917"}
+{"event":"effect.acknowledged","ts":"2026-08-05T14:32:05Z","work_id":"wi-1001","effect_id":"eff-8801"}
+{"event":"verification.completed","ts":"2026-08-05T14:39:00Z","work_id":"wi-1001","verification_id":"ver-5501","artifact_digest":"sha256:9f2c41d8a07b55c3e6d1f0aa8b2c9d4e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c","verdict":"pass"}
+{"event":"publication.committed","ts":"2026-08-05T14:41:00Z","work_id":"wi-1001","generation":1,"publication_id":"pub-3301","artifact_digest":"sha256:9f2c41d8a07b55c3e6d1f0aa8b2c9d4e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c","verification_id":"ver-5501"}
+{"event":"work.acknowledged","ts":"2026-08-05T14:45:00Z","work_id":"wi-1001","publication_id":"pub-3301","evidence":"commit f9e8d7c6b5a4 is ancestor of billing-service/main"}
+{"event":"work.discovered","ts":"2026-08-06T09:00:00Z","work_id":"wi-2101","campaign_id":"cmp-apimig-01","repository":"client-go","base_revision":"5d6e7f8a9b0c","tenant_id":"team-sdk"}
+{"event":"work.ready","ts":"2026-08-06T09:00:10Z","work_id":"wi-2101","campaign_id":"cmp-apimig-01","generation":1}
+{"event":"work.claimed","ts":"2026-08-06T09:01:00Z","work_id":"wi-2101","campaign_id":"cmp-apimig-01","generation":1,"session_id":"sess-802","conflict_key":"client-go/service-api-v2"}
+{"event":"execution.started","ts":"2026-08-06T09:01:10Z","work_id":"wi-2101","campaign_id":"cmp-apimig-01","generation":1,"attempt_id":1,"session_id":"sess-802","host_id":"host-03","base_revision":"5d6e7f8a9b0c","lane":"interactive","tenant_id":"team-sdk"}
+{"event":"execution.progressed","ts":"2026-08-06T09:10:00Z","work_id":"wi-2101","campaign_id":"cmp-apimig-01","generation":1,"attempt_id":1,"step":"v1-call-sites-replaced"}
+{"event":"artifact.prepared","ts":"2026-08-06T09:22:00Z","work_id":"wi-2101","campaign_id":"cmp-apimig-01","generation":1,"attempt_id":1,"artifact_digest":"sha256:4b8e2f6a1c9d7e3b5a0f8c6d4e2b9a7f5c3d1e0b8a6f4c2d9e7b5a3f1c0d8e6b","base_revision":"5d6e7f8a9b0c","head_revision":"0c1d2e3f4a5b"}
+{"event":"effect.dispatched","ts":"2026-08-06T09:23:00Z","work_id":"wi-2101","campaign_id":"cmp-apimig-01","generation":1,"attempt_id":1,"effect_id":"eff-8845"}
+{"event":"effect.committed","ts":"2026-08-06T09:23:03Z","work_id":"wi-2101","campaign_id":"cmp-apimig-01","generation":1,"effect_id":"eff-8845","receipt":"remote-push-9923"}
+{"event":"effect.acknowledged","ts":"2026-08-06T09:23:04Z","work_id":"wi-2101","campaign_id":"cmp-apimig-01","effect_id":"eff-8845"}
+{"event":"verification.completed","ts":"2026-08-06T09:30:00Z","work_id":"wi-2101","campaign_id":"cmp-apimig-01","verification_id":"ver-5533","artifact_digest":"sha256:4b8e2f6a1c9d7e3b5a0f8c6d4e2b9a7f5c3d1e0b8a6f4c2d9e7b5a3f1c0d8e6b","verdict":"pass"}
+{"event":"publication.committed","ts":"2026-08-06T09:33:00Z","work_id":"wi-2101","campaign_id":"cmp-apimig-01","generation":1,"publication_id":"pub-3320","artifact_digest":"sha256:4b8e2f6a1c9d7e3b5a0f8c6d4e2b9a7f5c3d1e0b8a6f4c2d9e7b5a3f1c0d8e6b","verification_id":"ver-5533"}
+{"event":"work.acknowledged","ts":"2026-08-06T09:36:00Z","work_id":"wi-2101","campaign_id":"cmp-apimig-01","publication_id":"pub-3320","evidence":"commit 0c1d2e3f4a5b is ancestor of client-go/main"}
+{"event":"work.discovered","ts":"2026-08-06T09:00:00Z","work_id":"wi-2102","campaign_id":"cmp-apimig-01","repository":"cli","base_revision":"9a8b7c6d5e4f","tenant_id":"team-sdk"}
+{"event":"work.ready","ts":"2026-08-06T09:00:10Z","work_id":"wi-2102","campaign_id":"cmp-apimig-01","generation":1}
+{"event":"work.claimed","ts":"2026-08-06T09:05:00Z","work_id":"wi-2102","campaign_id":"cmp-apimig-01","generation":1,"session_id":"sess-803","conflict_key":"cli/service-api-v2"}
+{"event":"execution.started","ts":"2026-08-06T09:05:12Z","work_id":"wi-2102","campaign_id":"cmp-apimig-01","generation":1,"attempt_id":1,"session_id":"sess-803","host_id":"host-05","base_revision":"9a8b7c6d5e4f","lane":"interactive","tenant_id":"team-sdk"}
+{"event":"work.blocked","ts":"2026-08-06T09:40:00Z","work_id":"wi-2102","campaign_id":"cmp-apimig-01","reason":"downstream batch API is incompatible with the v2 client; migration cannot proceed until platform-team ships the compatible endpoint","owner":"platform-team"}

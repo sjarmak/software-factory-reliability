@@ -1,0 +1,17 @@
+flowchart LR
+    DISC["Discover targets from repository state"]
+    SPAWN["Spawn per-repo work items"]
+    EXA["Execute repo A"]
+    EXB["Execute repo B"]
+    RED["Reduce: collect verified landings"]
+    REDISC["Rediscover: rescan repositories for remaining targets"]
+    DONE["Campaign complete: zero unverified targets remain"]
+
+    DISC --> SPAWN
+    SPAWN --> EXA
+    SPAWN --> EXB
+    EXA --> RED
+    EXB --> RED
+    RED --> REDISC
+    REDISC -->|"targets remain"| SPAWN
+    REDISC -->|"no targets"| DONE

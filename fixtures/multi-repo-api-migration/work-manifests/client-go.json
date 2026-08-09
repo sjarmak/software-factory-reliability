@@ -1,0 +1,29 @@
+{
+  "campaign_id": "cmp-apimig-01",
+  "work_id": "wi-2101",
+  "attempt_id": "1",
+  "generation": 1,
+  "host": "host-03",
+  "repository": "client-go",
+  "base_revision": "5d6e7f8a9b0c",
+  "head_revision": "0c1d2e3f4a5b",
+  "workspace": "/var/factory/workspaces/wi-2101",
+  "target_evidence": [
+    {
+      "type": "call_site",
+      "symbol": "old.API",
+      "source_revision": "5d6e7f8a9b0c"
+    }
+  ],
+  "affected_files": [
+    "transport/rest.go",
+    "transport/rest_test.go"
+  ],
+  "affected_symbols": [
+    "old.API",
+    "v2.Client"
+  ],
+  "artifact_digest": "sha256:4b8e2f6a1c9d7e3b5a0f8c6d4e2b9a7f5c3d1e0b8a6f4c2d9e7b5a3f1c0d8e6b",
+  "verification_id": "ver-5533",
+  "publication_state": "published"
+}

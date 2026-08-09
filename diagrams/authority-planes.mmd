@@ -1,0 +1,31 @@
+flowchart TB
+    subgraph control["Control plane"]
+        POL["Policy and approval gates"]
+        SCHED["Scheduler"]
+    end
+    subgraph ledger["Work ledger"]
+        FACTS["work identity, claims, generations, fencing tokens, artifact facts"]
+    end
+    subgraph procedure["Procedure"]
+        PROC["Durable steps and level-triggered reconcilers"]
+    end
+    subgraph workers["Workers"]
+        W1["Agent worker A"]
+        W2["Agent worker B"]
+    end
+    subgraph external["External systems"]
+        SCM["Code host"]
+        CI["Verifiers and CI"]
+    end
+
+    POL -->|authorizes| SCHED
+    SCHED -->|dispatches under claim| W1
+    SCHED -->|dispatches under claim| W2
+    W1 -->|fenced writes| FACTS
+    W2 -->|fenced writes| FACTS
+    PROC -->|re-derives state each pass| FACTS
+    PROC -->|repairs or escalates| POL
+    W1 -->|effects carry effect_id| SCM
+    W2 -->|effects carry effect_id| SCM
+    SCM --> CI
+    CI -->|verdicts bound to commit id| FACTS

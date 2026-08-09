@@ -5,3 +5,15 @@
 .beads-credential-key
 .beads/proxieddb/
 *.gate.lock*
+
+# Build and run outputs
+out/
+__pycache__/
+.pytest_cache/
+*.pyc
+
+# Local drafts, not for publication
+essay/
+
+# Local issue-tracker export (contains private working context)
+.beads/issues.jsonl

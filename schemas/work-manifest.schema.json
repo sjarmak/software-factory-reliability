@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://factory-reliability.example/schemas/work-manifest.schema.json",
+  "title": "In-flight work manifest",
+  "description": "Declares one attempt's intended change against the code estate before it publishes, so concurrent work on overlapping code is discoverable by other workers and by campaign accounting. Written at claim time, updated as the attempt progresses, and resolved at publication. A manifest is a statement of intent plus evidence, not authority: the fact store remains authoritative for who owns the work.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["work_id", "attempt_id", "generation", "repository", "base_revision", "publication_state"],
+  "properties": {
+    "campaign_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Campaign this work belongs to, when a campaign minted it. Absent for standalone work."
+    },
+    "work_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Logical work item identity, stable across every attempt."
+    },
+    "attempt_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Identity of the attempt that wrote this manifest. A retry writes under a new attempt_id and the same work_id."
+    },
+    "generation": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Claim generation under which this attempt holds the work. A manifest carrying a superseded generation describes a stale writer, and its publication must be rejected by the fence."
+    },
+    "host": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Host where the workspace lives. Diagnostic data for finding the workspace, not durable identity."
+    },
+    "repository": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Repository the change targets."
+    },
+    "base_revision": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Immutable revision the change is based on. Publication should recheck that the destination base has not moved past it."
+    },
+    "head_revision": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Current head revision of the in-flight change, updated as work progresses."
+    },
+    "workspace": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Path or reference of the working copy on the host."
+    },
+    "target_evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "symbol", "source_revision"],
+        "description": "One piece of evidence that a symbol belongs in this change, pinned to the revision where it was observed.",
+        "properties": {
+          "type": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Kind of evidence, for example call_site, symbol_definition, or config_reference."
+          },
+          "symbol": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Symbol the evidence refers to."
+          },
+          "source_revision": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Revision at which the evidence was observed. Evidence from an older revision may no longer hold at base_revision; re-verify when they differ."
+          }
+        }
+      },
+      "description": "Why this work targets what it targets: per-symbol evidence pinned to the revision where each observation was made."
+    },
+    "affected_files": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "description": "One file path the change touches."
+      },
+      "description": "Files the change touches; the coarse overlap set for collision detection against other manifests."
+    },
+    "affected_symbols": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "description": "One symbol the change touches."
+      },
+      "description": "Symbols the change touches; finer-grained overlap detection than files, since two changes in one file may still be disjoint."
+    },
+    "artifact_digest": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Immutable digest of the built artifact, once one exists. Links the manifest to the artifacts.identity chain in the factory contract."
+    },
+    "verification_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Identity of the verification run attesting to artifact_digest, once verification has run."
+    },
+    "publication_state": {
+      "enum": ["planned", "in_progress", "prepared", "published", "blocked", "abandoned"],
+      "description": "Where this change is in its publication lifecycle. planned: claimed, no edits yet. in_progress: edits underway. prepared: artifact built and verified, awaiting publication. published: the effect landed at the destination. blocked: cannot proceed without intervention. abandoned: deliberately ended without publishing; the manifest stays as a record."
+    }
+  }
+}

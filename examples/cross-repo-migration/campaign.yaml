@@ -1,0 +1,46 @@
+# Campaign declaration for the cross-repo-migration factory. Validates against
+# schemas/campaign.schema.json.
+#
+# The target list below is the current set, re-derived from discovery on a
+# cadence (see the campaign_target_set reconciliation entry in factory.yaml).
+# service-d has no disposition yet: it is open, and the campaign cannot
+# complete until it carries one of the three dispositions.
+
+campaign_id: retire-legacy-http-client
+intent: >-
+  Replace every call site of legacy_http_client with pooled_http_client, which
+  enforces connection limits and request deadlines. legacy_http_client is
+  frozen and scheduled for removal after 2026-12-31.
+
+discovery:
+  query: "symbol:legacy_http_client.Do lang:go"
+  snapshot: code-index@2026-08-01
+
+targets:
+  - repository: org/service-a
+    symbol: legacy_http_client.Do
+    revision: 4f2c1a9
+    disposition: published
+  - repository: org/service-b
+    symbol: legacy_http_client.Do
+    revision: 9d81e02
+    disposition: blocked_with_owner
+    owner: team-b
+    note: >-
+      Pinned to a vendored fork of the client; team-b owns the unfork, tracked
+      since 2026-07-20.
+  - repository: org/service-c
+    symbol: legacy_http_client.Do
+    revision: 77aa310
+    disposition: exempted
+    note: Service is scheduled for decommission before 2026-12-31; recorded 2026-08-02.
+  - repository: org/service-d
+    symbol: legacy_http_client.Do
+    revision: b3c9f44
+    # open: discovered in the 2026-08-01 snapshot, work not yet claimed
+
+completion:
+  all_current_targets_have_disposition:
+    - published
+    - exempted
+    - blocked_with_owner

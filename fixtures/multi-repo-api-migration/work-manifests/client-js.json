@@ -1,0 +1,29 @@
+{
+  "campaign_id": "cmp-apimig-01",
+  "work_id": "wi-2103",
+  "attempt_id": "1",
+  "generation": 1,
+  "host": "host-04",
+  "repository": "client-js",
+  "base_revision": "3e4f5a6b7c8d",
+  "head_revision": "7b8c9d0e1f2a",
+  "workspace": "/var/factory/workspaces/wi-2103",
+  "target_evidence": [
+    {
+      "type": "call_site",
+      "symbol": "old.API",
+      "source_revision": "3e4f5a6b7c8d"
+    }
+  ],
+  "affected_files": [
+    "src/api/rest.ts",
+    "src/api/rest.test.ts"
+  ],
+  "affected_symbols": [
+    "old.API",
+    "v2.Client"
+  ],
+  "artifact_digest": "sha256:c1a97e5b3d1f0a8c6e4b2d9f7a5c3e1b0d8f6a4c2e9b7d5f3a1c0e8b6d444f2e",
+  "verification_id": "ver-5541",
+  "publication_state": "published"
+}

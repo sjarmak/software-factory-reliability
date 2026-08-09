@@ -1,0 +1,45 @@
+# Minimal factory contract: the smallest declaration a new team can make
+# without guessing.
+# Every value the team has not decided yet says "unknown" instead of guessing.
+# The review command reads "unknown" and absent sections as explicit findings,
+# never as silent passes, so this file is a worklist as much as a contract.
+
+version: factory.reliability/v1
+
+factory:
+  name: starter-factory
+
+# Identity comes first. The logical work item, the delivery attempt, and the
+# executor session are three different things; retries stay safe only while the
+# contract keeps them distinct. An attempt id changes on every retry, a session
+# can outlive the attempt that launched it, and only the logical id is stable.
+work:
+  logical_identity: ticket_id       # stable for the item's whole life
+  attempt_identity: attempt_id      # a retry mints a new one; never key durable state on it
+  session_identity: session_id      # the executor session; can outlive its attempt
+  ownership:
+    generation: claim_generation    # monotonic; fences stale writers after a reclaim
+    lease_expiry: claim_expires_at  # bounds how long a dead owner blocks progress
+    fence:
+      enforced_by: unknown          # undecided; must end up destination-side, not the caller
+      operation: unknown            # undecided; must end up compare-and-set or transactional
+
+# Artifacts: the immutable identity is decided; verification and publication
+# conditions are not wired up yet, and the review command will say so.
+artifacts:
+  identity: commit_sha
+
+# One effect declared. The destination's behavior under retry has not been
+# established, so retry_contract and unknown_state_policy both record that
+# rather than assuming the friendly case.
+effects:
+  - name: open_change_request
+    destination: code_host
+    effect_identity: change_request_key
+    retry_contract: unknown
+    unknown_state_policy: unknown
+
+# Omitted sections (authorities, reconciliation, scheduling, code_estate,
+# campaigns, observability) each produce a not-declared finding in review.
+# Omission here means "not yet decided", recorded on purpose; it does not mean
+# "not applicable".

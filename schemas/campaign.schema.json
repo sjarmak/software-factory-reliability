@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://factory-reliability.example/schemas/campaign.schema.json",
+  "title": "Campaign declaration",
+  "description": "Declares one multi-target campaign: what change it makes, how targets were discovered, the current target set, and the completion rule. Completion is judged over the current target set, not the set discovered at kickoff, so a rerun of discovery that finds new targets reopens the campaign rather than being silently ignored.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["campaign_id", "intent", "discovery", "targets", "completion"],
+  "properties": {
+    "campaign_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable identifier of the campaign, referenced from work manifests via their campaign_id field."
+    },
+    "intent": {
+      "type": "string",
+      "minLength": 1,
+      "description": "One or two sentences stating the change the campaign makes and why. Written for the target owners who will read it out of context."
+    },
+    "discovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["query", "snapshot"],
+      "description": "How the target set was found. Discovery is repeatable: the same query against a newer snapshot yields the current target set, and completion is judged against that, not against a stale list.",
+      "properties": {
+        "query": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The query that finds targets, for example a code search over the estate. Kept verbatim so discovery can be rerun."
+        },
+        "snapshot": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Identity of the estate snapshot the current target set was discovered against, for example an index name plus an absolute date or revision."
+        }
+      }
+    },
+    "targets": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/target"
+      },
+      "description": "Current target set. A target without a disposition is still open; completion requires every current target to carry one."
+    },
+    "completion": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": true,
+      "description": "Completion rule for the campaign. The schema accepts other completion styles so they can be recorded and reviewed; the review rules fail any style that is not disposition-based over current targets, because finishing a set of child tasks says nothing about targets discovered later or tasks that dropped a target.",
+      "properties": {
+        "all_current_targets_have_disposition": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/disposition"
+          },
+          "description": "The disposition-based completion rule: the campaign is complete when every target in the current discovery snapshot carries one of these dispositions."
+        }
+      }
+    }
+  },
+  "$defs": {
+    "disposition": {
+      "enum": ["published", "exempted", "blocked_with_owner"],
+      "description": "Accountable end state of one target. published: the change landed. exempted: deliberately out of scope, with the reason recorded. blocked_with_owner: cannot proceed, and a named owner holds it."
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository"],
+      "description": "One campaign target. Targets are pinned to a repository, optionally narrowed to a path or symbol, and carry a disposition once resolved. When the disposition is blocked_with_owner, an owner is required, so no blocked target is anonymous.",
+      "properties": {
+        "repository": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Repository containing this target."
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "File path narrowing the target within the repository."
+        },
+        "symbol": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Symbol narrowing the target within the repository."
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Revision at which the target was observed during discovery."
+        },
+        "disposition": {
+          "$ref": "#/$defs/disposition",
+          "description": "End state of this target. Absent while the target is open."
+        },
+        "owner": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Named owner accountable for this target. Required when disposition is blocked_with_owner."
+        },
+        "note": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Free-form context, for example why an exemption was granted, with absolute dates."
+        }
+      },
+      "if": {
+        "properties": {
+          "disposition": {
+            "const": "blocked_with_owner"
+          }
+        },
+        "required": ["disposition"]
+      },
+      "then": {
+        "required": ["owner"]
+      }
+    }
+  }
+}

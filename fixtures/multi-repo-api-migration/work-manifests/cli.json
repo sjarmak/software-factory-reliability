@@ -1,0 +1,24 @@
+{
+  "campaign_id": "cmp-apimig-01",
+  "work_id": "wi-2102",
+  "attempt_id": "1",
+  "generation": 1,
+  "host": "host-05",
+  "repository": "cli",
+  "base_revision": "9a8b7c6d5e4f",
+  "workspace": "/var/factory/workspaces/wi-2102",
+  "target_evidence": [
+    {
+      "type": "call_site",
+      "symbol": "old.API",
+      "source_revision": "9a8b7c6d5e4f"
+    }
+  ],
+  "affected_files": [
+    "internal/batch/client.go"
+  ],
+  "affected_symbols": [
+    "old.API"
+  ],
+  "publication_state": "blocked"
+}

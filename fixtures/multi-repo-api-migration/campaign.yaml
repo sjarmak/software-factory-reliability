@@ -1,0 +1,58 @@
+# Campaign ledger for the multi-repo API migration fixture. Validates
+# against schemas/campaign.schema.json.
+#
+# Every current target carries a disposition, so the declared completion
+# rule is satisfied: nothing is undispositioned, the one blocked target
+# has a named owner, and the one exemption carries a review date. The
+# coverage reduction over this ledger is in coverage-report.md.
+
+campaign_id: cmp-apimig-01
+intent: >-
+  Remove every hand-written call site of old.API (the frozen v1
+  service-api client surface) outside service-api, migrating callers to
+  v2.Client, available since 2026-08-01. old.API is scheduled for removal
+  from service-api once no caller remains.
+
+discovery:
+  query: "symbol:old.API -repo:service-api"
+  snapshot: code-index@2026-08-08
+
+targets:
+  - repository: client-go
+    symbol: old.API
+    revision: 8f7e6d5c4b3a
+    disposition: published
+    note: >-
+      wi-2101; publication pub-3320, acknowledged 2026-08-06 (commit
+      0c1d2e3f4a5b is an ancestor of client-go/main).
+  - repository: client-js
+    symbol: old.API
+    revision: 2a3b4c5d6e7f
+    disposition: published
+    note: >-
+      wi-2103; publication pub-3327, acknowledged 2026-08-07 (commit
+      7b8c9d0e1f2a is an ancestor of client-js/main).
+  - repository: cli
+    symbol: old.API
+    revision: 9a8b7c6d5e4f
+    disposition: blocked_with_owner
+    owner: platform-team
+    note: >-
+      wi-2102; blocked since 2026-08-06. The downstream batch API is
+      incompatible with the v2 client; migration cannot proceed until
+      platform-team ships the compatible endpoint.
+  - repository: web
+    symbol: old.API
+    revision: 6c5d4e3f2a1b
+    disposition: exempted
+    note: >-
+      wi-2104; exempted 2026-08-07, review by 2026-09-30. The hand-written
+      calls are scheduled for replacement by a generated v2 client in
+      September 2026; migrating them now would produce work discarded
+      within weeks.
+
+completion:
+  all_current_targets_have_disposition:
+    - published
+    - exempted
+    - blocked_with_owner

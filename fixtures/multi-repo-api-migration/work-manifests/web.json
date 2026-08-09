@@ -1,0 +1,24 @@
+{
+  "campaign_id": "cmp-apimig-01",
+  "work_id": "wi-2104",
+  "attempt_id": "1",
+  "generation": 1,
+  "host": "host-06",
+  "repository": "web",
+  "base_revision": "6c5d4e3f2a1b",
+  "workspace": "/var/factory/workspaces/wi-2104",
+  "target_evidence": [
+    {
+      "type": "call_site",
+      "symbol": "old.API",
+      "source_revision": "6c5d4e3f2a1b"
+    }
+  ],
+  "affected_files": [
+    "app/data/service_api.js"
+  ],
+  "affected_symbols": [
+    "old.API"
+  ],
+  "publication_state": "abandoned"
+}

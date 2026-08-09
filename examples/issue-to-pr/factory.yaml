@@ -1,0 +1,101 @@
+# Issue-to-PR factory: the reference contract for a factory that turns issues
+# into verified, published pull requests. This is the normative shape; the
+# guarantee ledger entries in guarantees/ state which of its claims are backed
+# by enforcement or fault drills.
+
+version: factory.reliability/v1
+
+factory:
+  name: issue-to-pr
+
+# Four authorities, four systems. When they disagree, the facts authority wins
+# and the others reconcile against it.
+authorities:
+  facts:     { system: postgres, record: work_items }
+  procedure: { system: workflow-engine }
+  policy:    { system: fleet-scheduler }
+  effects:   { system: workers-and-publishers }
+
+work:
+  logical_identity: work_id
+  attempt_identity: attempt_id
+  session_identity: session_id
+  ownership:
+    generation: claim_generation     # incremented on every reclaim
+    lease_expiry: claim_expires_at   # missed renewal makes owner death detectable
+    fence:
+      enforced_by: publisher         # destination-side; the caller never fences itself
+      operation: compare-and-set     # generation compared and consumed atomically
+
+# The artifact chain: immutable identity, verification bound to that same
+# identity, and publication that rechecks ownership and the binding atomically.
+artifacts:
+  identity: commit_sha
+  verification:
+    identity: ci_run_id
+    binds_to: commit_sha             # must equal artifacts.identity; never a branch
+  publication:
+    conditions:
+      - current_generation           # publisher still owns the claim
+      - expected_base_revision       # the base has not moved underneath the change
+      - verification_matches_artifact  # the CI evidence is for this exact commit
+
+effects:
+  - name: create_pull_request
+    destination: code_host
+    effect_identity: pull_request_operation_id   # stable across retries, never attempt-scoped
+    retry_contract: reconcile        # the code host does not deduplicate creates for us
+    readback: find_by_head_reference # how a retry finds the prior attempt's PR
+    unknown_state_policy: block_and_escalate
+  - name: send_notification
+    destination: messaging
+    effect_identity: notification_id
+    retry_contract: deduplicate      # the messaging layer stores the id with the message
+    unknown_state_policy: block_and_escalate
+
+# Reconciliation loops reread external truth instead of trusting cached belief.
+# resolve_session_for_current_claim is what makes start-or-attach possible: a
+# retried attempt finds the live session bound to the current claim rather than
+# launching a second executor.
+reconciliation:
+  - fact: pull_request_state
+    query: read_current_pull_request
+    interval: 5m
+  - fact: running_session
+    query: resolve_session_for_current_claim
+    interval: 1m
+
+# Capacity is partitioned so a recovery storm cannot starve interactive work,
+# and fairness is layered so one tenant or repository cannot hold the pool.
+scheduling:
+  capacity: { total: 100 }
+  classes:
+    interactive: { reserved: 20 }
+    ordinary:    { maximum: 70 }
+    recovery:    { maximum: 30 }
+  fairness:
+    levels: [tenant, repository, priority]
+
+code_estate:
+  canonical_identity: repository@revision
+  topology_provider: code-impact-adapter
+  in_flight_manifest: work-manifests/
+
+campaigns:
+  completion:
+    all_current_targets_have_disposition:
+      - published
+      - exempted
+      - blocked_with_owner
+
+# The six lifecycle promises, watched end to end. A broken promise (for
+# example, verified work that never publishes) is actionable even when no
+# component reports an error.
+observability:
+  promises:
+    - ready_to_claim
+    - claimed_to_started
+    - started_to_progress
+    - completed_to_verified
+    - verified_to_published
+    - published_to_acknowledged

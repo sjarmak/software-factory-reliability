@@ -1,0 +1,103 @@
+# Long-running-agent factory: a contract for work executed by external agent
+# sessions that run for minutes to hours. The distinguishing risk: the agent
+# process can outlive both the worker that launched it and the delivery
+# attempt currently responsible for it. Session identity, the lease, and the
+# generation fence carry the safety story.
+#
+# Evidence basis for this shape: local observation. With a stable application
+# session key, a retried attempt attached to the surviving executor instead of
+# launching a second one, and the generation fence rejected the superseded
+# writer's late effect and completion
+# (temporallab2026:docs/findings/0001-worker-death-surviving-agent.md).
+
+version: factory.reliability/v1
+
+factory:
+  name: long-running-agent
+
+authorities:
+  facts:     { system: work-store, record: agent_sessions }
+  procedure: { system: workflow-engine }
+  policy:    { system: fleet-scheduler }
+  effects:   { system: agent-hosts }
+
+work:
+  logical_identity: task_id
+  # The attempt id belongs to the delivery layer. It changes on every retry
+  # and identifies the pending task, not the executor doing the work.
+  attempt_identity: delivery_attempt_id
+  # The session key is the load-bearing identity here: stable across attempts,
+  # resolved (not invented) by each retry, and mapped to a live process only
+  # through the registry, never inferred from a PID.
+  session_identity: agent_session_key
+  ownership:
+    generation: owner_generation      # incremented on every reclaim; late writers from
+                                      # older generations are rejected at the store
+    lease_expiry: lease_expires_at    # a missed renewal makes owner death detectable
+                                      # within one lease interval; it does not revoke,
+                                      # the generation fence does
+    fence:
+      enforced_by: store
+      operation: compare-and-set
+
+artifacts:
+  identity: workspace_commit
+  verification:
+    identity: check_run_id
+    binds_to: workspace_commit
+  publication:
+    conditions:
+      - current_generation
+      - verification_matches_artifact
+
+effects:
+  - name: apply_workspace_edit
+    destination: workspace
+    effect_identity: edit_operation_id
+    retry_contract: deduplicate
+    unknown_state_policy: block_and_escalate
+  - name: post_progress_update
+    destination: messaging
+    effect_identity: progress_message_id
+    retry_contract: deduplicate
+    unknown_state_policy: block_and_escalate
+
+reconciliation:
+  # Start-or-attach: before launching anything, a retried attempt resolves the
+  # session bound to the current claim. Attach when a registered live session
+  # exists; replace only through the fence when it does not.
+  - fact: running_session
+    query: resolve_session_for_current_claim
+    interval: 30s
+  # A launch decision is not process liveness. Local observation: the same
+  # pending-launch record was seen to mean both "no process" and "a live
+  # unregistered child", so the loop probes the registered process identity
+  # instead of inferring reality from store state
+  # (temporallab2026:docs/findings/0005-launch-pending-does-not-identify-process-reality.md).
+  - fact: session_process_liveness
+    query: probe_registered_process_identity
+    interval: 1m
+  - fact: workspace_state
+    query: read_workspace_head
+    interval: 5m
+
+scheduling:
+  capacity: { total: 40 }
+  classes:
+    interactive: { reserved: 8 }
+    ordinary:    { maximum: 24 }
+    recovery:    { maximum: 8 }    # reattach and cleanup work is bounded so a
+                                   # storm of dead-owner recoveries cannot take
+                                   # the pool from live sessions
+  fairness:
+    levels: [tenant, priority]
+
+observability:
+  promises:
+    - ready_to_claim
+    - claimed_to_started
+    - started_to_progress          # a session that stops heartbeating progress
+                                   # breaks this promise long before any timeout
+    - completed_to_verified
+    - verified_to_published
+    - published_to_acknowledged

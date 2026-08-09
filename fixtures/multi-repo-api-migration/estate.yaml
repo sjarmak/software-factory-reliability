@@ -1,0 +1,90 @@
+# Code estate for the multi-repo API migration fixture.
+#
+# Five repositories. service-api defines old.API, the frozen v1 client
+# surface, and the v2.Client replacement (available since 2026-08-01).
+# The other four repositories carried hand-written old.API call sites at
+# campaign kickoff (2026-08-06), which is what made them targets of
+# campaign cmp-apimig-01 (see campaign.yaml). Revisions below are the
+# ones the 2026-08-08 discovery pass observed; per-reference history
+# records where each call site was first observed and, for the published
+# repositories, the commit that removed it.
+#
+# Used by: campaign.yaml (target set), work-manifests/ (per-child
+# manifests), coverage-report.md (the worked coverage reduction), and the
+# worked example in ../../observability/campaign-coverage.md. The child
+# event streams for client-go and cli are in
+# ../../observability/sample-events.jsonl.
+
+estate:
+  snapshot: code-index@2026-08-08
+  canonical_identity: repository@revision
+
+repositories:
+  - name: service-api
+    revision: 7e6f5a4b3c2d
+    depends_on: []
+    role: campaign_origin            # defines the symbol; never a target
+    symbols:
+      - symbol: old.API
+        relation: defines
+        path: api/old/api.go
+        note: v1 client surface, frozen since 2026-08-01, removal planned
+      - symbol: v2.Client
+        relation: defines
+        path: api/v2/client.go
+        note: replacement, available since 2026-08-01
+
+  - name: client-go
+    revision: 8f7e6d5c4b3a
+    depends_on: [service-api]
+    symbols:
+      - symbol: old.API
+        relation: references
+        evidence: call_site
+        paths: [transport/rest.go, transport/rest_test.go]
+        observed_at: 5d6e7f8a9b0c    # kickoff discovery, 2026-08-06
+        removed_in: 0c1d2e3f4a5b     # published by wi-2101, acknowledged 2026-08-06
+      - symbol: v2.Client
+        relation: references
+        evidence: call_site
+        observed_at: 8f7e6d5c4b3a
+
+  - name: client-js
+    revision: 2a3b4c5d6e7f
+    depends_on: [service-api]
+    symbols:
+      - symbol: old.API
+        relation: references
+        evidence: call_site
+        paths: [src/api/rest.ts]
+        observed_at: 3e4f5a6b7c8d    # kickoff discovery, 2026-08-06
+        removed_in: 7b8c9d0e1f2a     # published by wi-2103, acknowledged 2026-08-07
+      - symbol: v2.Client
+        relation: references
+        evidence: call_site
+        observed_at: 2a3b4c5d6e7f
+
+  - name: cli
+    revision: 9a8b7c6d5e4f
+    depends_on: [client-go]
+    symbols:
+      - symbol: old.API
+        relation: references
+        evidence: call_site
+        paths: [internal/batch/client.go]
+        observed_at: 9a8b7c6d5e4f    # still present at the 2026-08-08 pass
+        note: batch path depends on a downstream API incompatible with
+          v2.Client; target blocked, owner platform-team, since 2026-08-06
+
+  - name: web
+    revision: 6c5d4e3f2a1b
+    depends_on: [client-js]
+    symbols:
+      - symbol: old.API
+        relation: references
+        evidence: call_site
+        paths: [app/data/service_api.js]
+        observed_at: 6c5d4e3f2a1b    # still present at the 2026-08-08 pass
+        note: hand-written calls scheduled for replacement by a generated
+          v2 client in September 2026; target exempted 2026-08-07, review
+          by 2026-09-30

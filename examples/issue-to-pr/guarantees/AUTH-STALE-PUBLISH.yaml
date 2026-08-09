@@ -1,0 +1,33 @@
+# Guarantee: a superseded owner cannot publish.
+# Evidence basis for the mechanism family: local observation. In the
+# temporal_projects worker-death experiments, a destination-side generation
+# fence rejected a delayed generation-1 effect and its completion after
+# generation 2 became current
+# (temporallab2026:docs/findings/0001-worker-death-surviving-agent.md).
+# The drill and artifact below are this factory's own evidence, re-run against
+# this publisher; the citation motivates the shape, it does not substitute for
+# the drill.
+
+id: AUTH-STALE-PUBLISH
+claim: >-
+  A publish carrying a superseded claim generation is rejected at the
+  publisher before any repository mutation, for every interleaving in which
+  the claim changed hands after the stale publisher last validated ownership.
+owner: platform-reliability
+mechanism:
+  type: destination-fence
+  inputs:
+    - work_id
+    - claim_generation
+oracle:
+  type: fault-drill
+  assertion: >-
+    After the drill reclaims the work item (generation n+1), a publish issued
+    under generation n returns a stale-owner rejection, the repository head is
+    unchanged, and the fact store records the rejection. The negative control
+    (fence disabled) must show the stale publish landing.
+evidence:
+  status: fault-tested
+  drill: drills/stale-publish-after-reclaim.md
+  last_verified: "2026-08-05"
+  artifact: evidence/auth-stale-publish/run-2026-08-05.jsonl

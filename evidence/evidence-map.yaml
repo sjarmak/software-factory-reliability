@@ -1,0 +1,272 @@
+# Evidence map: per-pattern claims with basis labels.
+#
+# basis is one of:
+#   foundational       established distributed-systems literature
+#   agent-era          published work on agent systems
+#   local-observation  the production installation (gas-city), the durability
+#                      lab (temporal_projects), or the book manuscript's
+#                      experiments, cited by file path
+#   inference          our synthesis, not yet demonstrated
+#
+# Bibliographic entries for the named literature live in evidence/sources.bib.
+# An inference entry is a design bet, never an established result.
+
+version: 1
+updated: "2026-08-09"
+
+patterns:
+  stable-work-identity:
+    - claim: >-
+        Retries and redeliveries are safe only when they carry a stable
+        logical key the destination can recognize; delivery attempts,
+        process IDs, and engine attempt numbers are observations, not
+        logical identity.
+      basis: foundational
+      source: "Joshi 2023, Patterns of Distributed Systems (idempotent receiver, request identifiers)"
+    - claim: >-
+        A stable application session key made two activity attempts converge
+        on one external process after a worker SIGKILL; attempt 2 received
+        the generation-1 lease and launched no duplicate child.
+      basis: local-observation
+      source: temporallab2026:docs/findings/0001-worker-death-surviving-agent.md
+    - claim: >-
+        21 direct model CLI invocations emitted 21 distinct vendor session
+        IDs; transcript identity does not authorize a workspace writer and
+        is not a destination transaction.
+      basis: local-observation
+      source: temporallab2026:docs/findings/0010-direct-claude-activity-retry-duplicates-turns-and-effects.md
+
+  fenced-authority:
+    - claim: >-
+        Fencing tokens (monotonically increasing epochs checked at the
+        resource) prevent a paused or stale lease holder from writing after
+        its lease has expired; the check must live at the destination.
+      basis: foundational
+      source: "Kleppmann 2017, Designing Data-Intensive Applications, ch. 8"
+    - claim: >-
+        In an ABA owner-label probe, both unsafe systems accepted four
+        obsolete generation-7 actions after generation 9 became current;
+        both fenced systems accepted zero. The fence, not the owner label
+        or the durability substrate, supplies safety.
+      basis: local-observation
+      source: temporallab2026:docs/guarantees.md
+    - claim: >-
+        On 2026-07-28, with a Dolt server capped at 32 connections, 12 fresh
+        claims yielded only 10 distinct winning beads; two beads were each
+        reported freshly claimed by two distinct actors via cross-session
+        working-set overwrite, under strict concurrency one and a city-wide
+        file lock.
+      basis: local-observation
+      source: gascity2026:docs/recovery/connection-cure-review-02669a98f.md
+
+  start-or-attach:
+    - claim: >-
+        At-least-once redelivery is the default for any queue or engine that
+        survives crashes, so a launch decision will be redelivered; the
+        consumer must decide attach-or-replace, and a blind relaunch is a
+        duplicate executor.
+      basis: foundational
+      source: "Kleppmann 2017, Designing Data-Intensive Applications, ch. 8 and 11"
+    - claim: >-
+        The identical launch_pending store state was observed to mean both
+        no process (pre-exec) and a live unregistered child (post-exec);
+        neither attach nor replace follows from launch_pending alone, so the
+        recovery path must discover process reality before choosing.
+      basis: local-observation
+      source: temporallab2026:docs/findings/0005-launch-pending-does-not-identify-process-reality.md
+    - claim: >-
+        Duplicate workflow roots for a single target were created 33 and 26
+        seconds apart because the dedup query looked in a different store
+        from where the duplicate lived (open P0, gc-28jm).
+      basis: local-observation
+      source: gascity2026:docs/design/city-reliability-surface.md
+
+  durable-intent:
+    - claim: >-
+        Recording durable intent before acting (write-ahead) lets recovery
+        distinguish never-started from possibly-done; without the record,
+        both look identical after a crash.
+      basis: foundational
+      source: "Joshi 2023, Patterns of Distributed Systems (write-ahead log)"
+    - claim: >-
+        A naive pipeline killed between requesting a merge and recording
+        completion retried the merge and reported success; under the same
+        kill placement, the guarded variant recorded an intent claim first
+        and on recovery requested one merge, emitted one escalation, and
+        preserved the uncertainty as a failed outcome.
+      basis: local-observation
+      source: ercabook2026:chapters/ch08
+    - claim: >-
+        An audit log recorded 1384 worktree-recorded success events for
+        writes that landed on the wrong rig (gc-na2o); the log asserted
+        success that never happened, so intent and observed outcome must be
+        separate records.
+      basis: local-observation
+      source: gascity2026:docs/design/city-reliability-surface.md
+
+  effect-identity:
+    - claim: >-
+        Idempotency tokens carried into the destination let a retried
+        request be recognized and answered with the original result instead
+        of repeating the side effect.
+      basis: foundational
+      source: "AWS Builders Library, Timeouts, retries, and backoff with jitter"
+    - claim: >-
+        All 18 unsafe trials recorded two physical effects under one
+        recorded completion; all 18 protected trials recorded one. Six
+        destination classes required six distinct mechanisms; no single
+        generic mechanism covered all six.
+      basis: local-observation
+      source: temporallab2026:docs/findings/0004-one-temporal-completion-can-hide-two-effects.md
+    - claim: >-
+        External mutations are the worst loss class in production; a
+        duplicate PR, merge, or push is worse than a skipped cycle.
+      basis: local-observation
+      source: gascity2026:docs/design/software-factory-philosophy.md
+
+  explicit-unknown-state:
+    - claim: >-
+        On recovery after a kill between an external effect and its
+        completion record, the run must do exactly one of three things:
+        return the recorded result, converge on the same external state, or
+        stop with an explicit unknown-state escalation. Assuming success
+        loses work; assuming failure repeats the effect.
+      basis: local-observation
+      source: ercabook2026:chapters/ch08
+    - claim: >-
+        In all six engine-only cancellation controls the workflow closed as
+        canceled while the still-live agent then committed one effect and
+        one outcome; cancellation without application-level revocation
+        leaves authority with a holder the ledger no longer tracks.
+      basis: local-observation
+      source: temporallab2026:docs/findings/0006-cancellation-requires-application-revocation.md
+    - claim: >-
+        A SIGKILL mid-dispatch produced a poisoned pending claim refused
+        forever with zero escalation (gc-4zf.4, 2026-07-16); fail-closed
+        without an escalation hook self-erases.
+      basis: local-observation
+      source: gascity2026:docs/design/city-reliability-surface.md
+
+  verify-before-publish:
+    - claim: >-
+        A closed work item is a status signal, not an outcome signal; the
+        terminal check is artifact movement (is the commit an ancestor of
+        main), never the item's state field.
+      basis: local-observation
+      source: gascity2026:docs/design/software-factory-philosophy.md
+    - claim: >-
+        Before a landing reaper existed, roughly 12 branches per day were
+        closed in the tracker but never merged (rca-eb-merge-gap).
+      basis: local-observation
+      source: gascity2026:docs/gc-4zf-track-a-reliability-surface-map-2026-07-16.md
+    - claim: >-
+        Across 20,574 real agent sessions, 91.49 percent of visible
+        misalignment resolutions required explicit user correction, and
+        inaccurate self-reporting grew as a share of remaining episodes;
+        an agent's self-report is not completion evidence.
+      basis: agent-era
+      source: "Engineering Reliable Coding Agents manuscript ch07, citing Tang et al. 2026"
+
+  reconciliation:
+    - claim: >-
+        Level-triggered controllers reconcile observed state toward desired
+        state on every pass, so a lost event costs latency, not
+        correctness.
+      basis: foundational
+      source: "Kubernetes controller documentation"
+    - claim: >-
+        Signals advance, queries repair: events exist for latency and the
+        correctness path is a level-triggered reconciler. The event
+        transport drops records silently by design, so a signal contract
+        with no reconciler rots invisibly.
+      basis: local-observation
+      source: gascity2026:docs/design/software-factory-philosophy.md
+    - claim: >-
+        Every durable wakeup in the installation reduced to a durable
+        timestamp in the store plus a periodic scan; the hardest
+        verification in the fleet (merge-base landing checks) runs as a
+        scan with no timer, marker, or engine.
+      basis: local-observation
+      source: gascity2026:docs/design/city-reliability-surface.md
+
+  topology-aware-scheduling:
+    - claim: >-
+        Control-flow dependency patterns (sequence, parallel split,
+        synchronization, exclusive choice) are the vocabulary a work
+        graph's edges must be able to express.
+      basis: foundational
+      source: "van der Aalst et al. 2003, Workflow Patterns"
+    - claim: >-
+        Multi-agent configurations used roughly 15x the tokens of
+        single-agent baselines with non-monotonic returns as agents were
+        added, and a planner-to-subagent search design attributed 41.8
+        percent of its failures to handoff loss.
+      basis: agent-era
+      source: "Engineering Reliable Coding Agents manuscript ch17, citing Li et al. 2026 and Oskooei et al. 2026"
+    - claim: >-
+        An eleven-week fixed-arrival replay of 1,286 work items across 22
+        execution pools put four scheduling policies within 0.1 percent of
+        one another; the visible improvement concentrated in the one
+        contended pool, and none of the elaborate policies met the
+        predeclared promotion bar.
+      basis: local-observation
+      source: ercabook2026:chapters/ch18
+    - claim: >-
+        Scheduling an agent fleet over a conflict graph of authority and
+        resource overlap (files, generated artifacts, fixtures, schemas,
+        environments, spanning invariants) reduces cross-agent
+        interference. This synthesis is ours; no end-to-end demonstration
+        exists yet.
+      basis: inference
+      source: "this kit's topology-aware-scheduling pattern, synthesized from manuscript ch17 and the production claim model"
+
+  cross-repo-campaigns:
+    - claim: >-
+        Large-scale automated refactoring across a very large codebase
+        works when transformation, validation, and landing are separated
+        into a pipeline with mechanical verification at each stage.
+      basis: foundational
+      source: "Wright et al. 2013, Large-Scale Automated Refactoring Using ClangMR"
+    - claim: >-
+        A single repository with atomic visibility of the whole tree
+        simplifies cross-cutting changes; a multi-repo campaign must
+        reconstruct the coverage guarantees a monorepo provides for free.
+      basis: foundational
+      source: "Potvin and Levenberg 2016, Why Google Stores Billions of Lines of Code in a Single Repository"
+    - claim: >-
+        A stranded-work inventory found 37 open workflow-marker items, the
+        oldest 87 days stale, and required whole-molecule close so no
+        orphan step re-routes; campaign children that cannot be closed as a
+        unit become respawn-loop fuel.
+      basis: local-observation
+      source: gascity2026:docs/dr-61j-stranded-molecule-inventory-2026-07-14.md
+    - claim: >-
+        Representing an in-flight campaign as a live change graph (targets,
+        per-repo children, verification state) that is rediscovered from
+        the repositories on every reconciliation pass, rather than
+        remembered, closes the lost-child completion hole. This synthesis
+        is ours; no end-to-end demonstration exists yet.
+      basis: inference
+      source: "this kit's cross-repo-campaigns pattern and the campaign-coverage-loop diagram"
+
+  promise-oriented-observability:
+    - claim: >-
+        Liveness checking is not outcome checking: 83 of 106 live health
+        orders never examined whether work moved, and a 30-second liveness
+        loop reports green 120 times an hour while zero work items
+        dispatch.
+      basis: local-observation
+      source: gascity2026:docs/design/city-reliability-surface.md
+    - claim: >-
+        A resource sweep ran at the right cadence with the wrong metric on
+        2026-07-15: it gated only on MemAvailable under 4G and stayed
+        silent while committed address space ran 68 to 75G on a 62.4G host
+        with swap free near zero; the host died about 100 minutes later.
+      basis: local-observation
+      source: gascity2026:docs/rca-host-death-2026-07-15-memory-exhaustion.md
+    - claim: >-
+        Recovery metrics must be retained by failure ordinal; a pooled mean
+        conceals stateful degradation when the third kill produces a longer
+        outage than the first.
+      basis: local-observation
+      source: ercabook2026:chapters/ch09

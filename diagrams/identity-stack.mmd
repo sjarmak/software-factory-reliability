@@ -1,0 +1,16 @@
+flowchart TB
+    WORK["work_id mig-042: stable logical identity"]
+    A1["attempt 1, generation 1"]
+    A2["attempt 2, after worker death"]
+    S1["executor session S1, still alive"]
+    S2["executor session S2, duplicate"]
+    E1["one external effect, effect_id mig-042/step-9"]
+    E2["second external effect: violation"]
+
+    WORK --> A1
+    WORK --> A2
+    A1 -->|launches| S1
+    A2 -->|"start-or-attach: registry lookup finds S1"| S1
+    A2 -.->|"blind relaunch"| S2
+    S1 --> E1
+    S2 -.-> E2

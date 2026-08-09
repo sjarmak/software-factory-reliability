@@ -1,0 +1,28 @@
+# Guarantee: retried PR creation yields one pull request.
+# Status is enforced, not fault-tested: the publisher performs the readback
+# before every create, and code review plus an integration test cover the
+# mechanism, but no drill has yet injected a worker kill between the create
+# call and its response. Until that drill runs and its evidence is preserved,
+# this entry must not claim fault-tested.
+
+id: EFFECT-DEDUP-PR
+claim: >-
+  For one logical work item, any number of retried create_pull_request
+  attempts leave at most one open pull request at the code host, and every
+  attempt returns a receipt for that same pull request.
+owner: publisher-team
+mechanism:
+  type: readback-before-create
+  inputs:
+    - pull_request_operation_id
+    - work_id
+oracle:
+  type: readback-comparison
+  assertion: >-
+    find_by_head_reference returns exactly one pull request for the work
+    item's head reference after N create attempts, for N >= 2, and all N
+    receipts reference that pull request. Callers for one
+    pull_request_operation_id are serialized; the oracle does not cover
+    concurrent same-id callers.
+evidence:
+  status: enforced

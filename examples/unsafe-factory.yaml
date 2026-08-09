@@ -1,0 +1,95 @@
+# Deliberately flawed factory contract, for demonstrations and tests of the
+# review rules. It is schema-valid on purpose: every flaw here is a semantic
+# defect the review command must catch, not a syntax error. Each flaw is
+# labeled with the rule expected to fire.
+
+version: factory.reliability/v1
+
+factory:
+  name: unsafe-factory
+
+authorities:
+  facts:     { system: work-store, record: work_items }
+  procedure: { system: workflow-engine }
+  policy:    { system: workflow-engine }
+  effects:   { system: workers }
+
+work:
+  logical_identity: work_id
+  attempt_identity: attempt_id
+  session_identity: session_id
+  ownership:
+    generation: claim_generation
+    lease_expiry: claim_expires_at
+    fence:
+      # FLAW (AUTH-002): the caller checks ownership, then writes. Between the
+      # check and the write the claim can change hands; that window is a
+      # time-of-check to time-of-use race, and only a destination-side
+      # compare-and-set (or transaction) closes it.
+      enforced_by: caller
+      operation: read-then-write
+
+artifacts:
+  identity: commit_sha
+  verification:
+    identity: ci_run_id
+    # FLAW (VERIFY-001): verification binds to a branch name, a mutable
+    # reference. The branch can move after checks pass, so the verified
+    # content and the published content can differ while the evidence still
+    # looks green.
+    binds_to: branch_name
+  publication:
+    # FLAW (VERIFY-002): conditions omit verification_matches_artifact, so a
+    # publish can ship an artifact whose evidence belongs to a different one.
+    conditions:
+      - current_generation
+      - expected_base_revision
+
+effects:
+  - name: create_pull_request
+    destination: code_host
+    # FLAW (IDENT-002): the effect identity embeds the attempt identity, so
+    # every retry mints a fresh effect id and no destination can deduplicate.
+    effect_identity: "pr_op_{attempt_id}"
+    # FLAW (EFFECT-004): retry_contract reconcile with no readback declared;
+    # the caller has no way to ask the destination whether the prior attempt
+    # landed before repeating it.
+    retry_contract: reconcile
+    unknown_state_policy: block_and_escalate
+  - name: send_notification
+    destination: messaging
+    effect_identity: notification_id
+    retry_contract: deduplicate
+    # FLAW (EFFECT-003): no unknown_state_policy declared. The schema permits
+    # the omission so partial contracts can still be recorded; review fails
+    # it, because an undeclared ambiguity policy decays into whichever
+    # assumption the on-call person makes at 3am.
+
+# FLAW (RECON-001, RECON-002): no reconciliation section. Nothing rereads the
+# effect destinations' actual state, and nothing resolves the running session
+# for the current claim, so a retry cannot start-or-attach; it can only launch
+# blind.
+
+scheduling:
+  # FLAW (FLEET-001, FLEET-002, FLEET-003): one undifferentiated pool. No
+  # recovery ceiling, so a retry storm can occupy every slot; no reserved
+  # interactive capacity, so human-facing work queues behind the storm; no
+  # fairness levels, so a single tenant can hold the whole pool.
+  capacity: { total: 100 }
+
+campaigns:
+  completion:
+    # FLAW (CAMP-001): completion defined as "every child task finished".
+    # That says nothing about targets discovered after kickoff, or about a
+    # task that silently dropped a target; the campaign can read complete
+    # while targets remain untouched. Completion must be disposition-based
+    # over the current target set.
+    all_children_finished: true
+
+observability:
+  # FLAW (OBS-001): four of the six lifecycle promises are missing
+  # (started_to_progress, completed_to_verified, verified_to_published,
+  # published_to_acknowledged), so stalls between those states are invisible.
+  promises:
+    - ready_to_claim
+    - claimed_to_started
