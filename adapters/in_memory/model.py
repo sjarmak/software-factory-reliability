@@ -13,9 +13,15 @@ Three layers that real factories often conflate are kept separate here:
 
 Basis note: the layer split mirrors the guarantee split observed in the
 Temporal experiment series (local observation,
-/home/ds/projects/temporal_projects/docs/guarantees.md): completion
-cardinality at the orchestrator is not effect cardinality at the
-destination, and the ledger can lag the destination.
+temporallab2026:docs/guarantees.md): completion cardinality at the
+orchestrator is not effect cardinality at the destination, and the ledger
+can lag the destination.
+
+Fencing model: in fenced mode the destination validates a presented
+generation against current authoritative ownership as one atomic step.
+The simulator models the ledger and the destination's fence register as a
+single atomic authority boundary, which is the contract AUTH-002 requires
+of a real destination.
 """
 
 from __future__ import annotations
@@ -96,10 +102,13 @@ class Destination:
         self._by_effect.setdefault(effect_id, mutation)
         return mutation, True
 
-    def compare_and_publish(self, artifact_id: str, generation: int) -> bool:
-        """Atomic compare on generation at the destination (fenced path)."""
-        current = self.artifact["generation"] if self.artifact else None
-        if current is not None and generation <= current:
+    def compare_and_publish(self, artifact_id: str, generation: int,
+                            current_generation: int) -> bool:
+        """Atomic compare at the destination (fenced path): the presented
+        generation must equal current authoritative ownership. Comparing
+        against prior artifact history instead would accept a stale writer
+        whenever no artifact exists yet."""
+        if generation != current_generation:
             return False
         self.artifact = {"artifact_id": artifact_id, "generation": generation}
         return True
@@ -245,10 +254,23 @@ class Factory:
                  generation=item.generation, lease=item.lease)
         return item.generation
 
-    def complete_work(self, work_id: str, session_id: str, attempt: int) -> None:
-        self.work_items[work_id].status = "completed"
+    def complete_work(self, work_id: str, session_id: str, attempt: int,
+                      generation: int | None = None) -> bool:
+        """Record completion. Fenced mode validates the presented generation
+        against current ownership; completion is an authoritative mutation
+        and the same fence applies to it as to publication."""
+        item = self.work_items[work_id]
+        presented = item.generation if generation is None else generation
+        if self.publisher_mode == "fenced" and presented != item.generation:
+            self.log("completion-rejected-stale", work_id=work_id,
+                     session_id=session_id, attempt=attempt,
+                     generation=presented,
+                     current_generation=item.generation)
+            return False
+        item.status = "completed"
         self.log("outcome-accepted", work_id=work_id, session_id=session_id,
-                 attempt=attempt)
+                 attempt=attempt, generation=presented)
+        return True
 
     # destination operations
 
@@ -281,10 +303,13 @@ class Factory:
     def publish(self, work_id: str, artifact_id: str, generation: int,
                 session_id: str, observed_generation: int | None = None) -> bool:
         if self.publisher_mode == "fenced":
-            accepted = self.destination.compare_and_publish(artifact_id, generation)
+            current = self.work_items[work_id].generation
+            accepted = self.destination.compare_and_publish(
+                artifact_id, generation, current)
             kind = "publish-accepted" if accepted else "publish-rejected-stale"
             self.log(kind, work_id=work_id, session_id=session_id,
-                     artifact_id=artifact_id, generation=generation)
+                     artifact_id=artifact_id, generation=generation,
+                     current_generation=current)
             return accepted
         # Unfenced: caller-side check against its own earlier observation,
         # then an unconditional write. The check can pass on stale data.

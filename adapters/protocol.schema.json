@@ -4,8 +4,12 @@
   "title": "Factory drill adapter protocol",
   "description": "Messages exchanged between a drill driver and a factory adapter. Transport is JSON over stdio, one message per line: the driver writes one command object per line and the adapter answers with exactly one observation object per line, in order. A message is valid when it matches either the command shape or the observation shape.",
   "oneOf": [
-    { "$ref": "#/$defs/command" },
-    { "$ref": "#/$defs/observation" }
+    {
+      "$ref": "#/$defs/command"
+    },
+    {
+      "$ref": "#/$defs/observation"
+    }
   ],
   "$defs": {
     "command": {
@@ -14,19 +18,30 @@
         {
           "description": "seed: load a scenario into the factory. After a successful seed the factory holds exactly the scenario's initial state and no execution has started. The mode selects the wiring under test: protected wires the safety mechanism (dedup destination, fenced publisher, session reattach, reconciler), unsafe wires the negative control that the oracle is expected to catch.",
           "type": "object",
-          "required": ["op", "params"],
+          "required": [
+            "op",
+            "params"
+          ],
           "properties": {
-            "op": { "const": "seed" },
+            "op": {
+              "const": "seed"
+            },
             "params": {
               "type": "object",
-              "required": ["scenario", "mode"],
+              "required": [
+                "scenario",
+                "mode"
+              ],
               "properties": {
                 "scenario": {
                   "type": "string",
                   "description": "Drill scenario name, for example worker-dies-agent-survives."
                 },
                 "mode": {
-                  "enum": ["protected", "unsafe"],
+                  "enum": [
+                    "protected",
+                    "unsafe"
+                  ],
                   "description": "protected exercises the safety mechanism; unsafe is the negative control whose violation the oracle must detect."
                 }
               },
@@ -38,22 +53,36 @@
         {
           "description": "start: begin execution of the seeded scenario. Marks the run as started at the current logical tick; scenario steps advance only inside wait_for_barrier, so the driver controls exactly how far execution proceeds.",
           "type": "object",
-          "required": ["op"],
+          "required": [
+            "op"
+          ],
           "properties": {
-            "op": { "const": "start" },
-            "params": { "type": "object", "additionalProperties": false }
+            "op": {
+              "const": "start"
+            },
+            "params": {
+              "type": "object",
+              "additionalProperties": false
+            }
           },
           "additionalProperties": false
         },
         {
           "description": "wait_for_barrier: run the scenario until the named barrier fires, then pause with the system frozen at exactly that point. Barriers are named causal points in the scenario, not delays; on success every step before the barrier has run and no step after it has. The terminal barrier is named run-complete.",
           "type": "object",
-          "required": ["op", "params"],
+          "required": [
+            "op",
+            "params"
+          ],
           "properties": {
-            "op": { "const": "wait_for_barrier" },
+            "op": {
+              "const": "wait_for_barrier"
+            },
             "params": {
               "type": "object",
-              "required": ["name"],
+              "required": [
+                "name"
+              ],
               "properties": {
                 "name": {
                   "type": "string",
@@ -68,15 +97,27 @@
         {
           "description": "inject_fault: apply a fault while the run is paused at at_barrier, which must equal the barrier the run is currently paused at. This ties the fault to a position in the causal order rather than to timing. kill_worker terminates the worker process abruptly; sessions it launched survive it. drop_event arms the event bus to drop the next emitted event. expire_lease invalidates the current lease on the work item.",
           "type": "object",
-          "required": ["op", "params"],
+          "required": [
+            "op",
+            "params"
+          ],
           "properties": {
-            "op": { "const": "inject_fault" },
+            "op": {
+              "const": "inject_fault"
+            },
             "params": {
               "type": "object",
-              "required": ["kind", "at_barrier"],
+              "required": [
+                "kind",
+                "at_barrier"
+              ],
               "properties": {
                 "kind": {
-                  "enum": ["kill_worker", "drop_event", "expire_lease"],
+                  "enum": [
+                    "kill_worker",
+                    "drop_event",
+                    "expire_lease"
+                  ],
                   "description": "Fault kind to inject."
                 },
                 "at_barrier": {
@@ -96,12 +137,19 @@
         {
           "description": "advance_generation: allocate the next monotonic ownership generation for the work item, with a fresh lease. Models a successor writer taking ownership; the returned generation is strictly greater than every earlier generation for that work item.",
           "type": "object",
-          "required": ["op", "params"],
+          "required": [
+            "op",
+            "params"
+          ],
           "properties": {
-            "op": { "const": "advance_generation" },
+            "op": {
+              "const": "advance_generation"
+            },
             "params": {
               "type": "object",
-              "required": ["work_id"],
+              "required": [
+                "work_id"
+              ],
               "properties": {
                 "work_id": {
                   "type": "string",
@@ -116,50 +164,85 @@
         {
           "description": "read_authoritative_state: return the application ledger as the application believes it: work items (status, generation, lease), claims and the sessions bound to them, sessions, and effect records. This view can be stale relative to the destination; that gap is what some drills measure.",
           "type": "object",
-          "required": ["op"],
+          "required": [
+            "op"
+          ],
           "properties": {
-            "op": { "const": "read_authoritative_state" },
-            "params": { "type": "object", "additionalProperties": false }
+            "op": {
+              "const": "read_authoritative_state"
+            },
+            "params": {
+              "type": "object",
+              "additionalProperties": false
+            }
           },
           "additionalProperties": false
         },
         {
           "description": "read_external_effects: return ground truth at the external destination: the ordered mutation list (with effect ids and receipts) and the currently published artifact. Must be read from the destination itself, never derived from the ledger.",
           "type": "object",
-          "required": ["op"],
+          "required": [
+            "op"
+          ],
           "properties": {
-            "op": { "const": "read_external_effects" },
-            "params": { "type": "object", "additionalProperties": false }
+            "op": {
+              "const": "read_external_effects"
+            },
+            "params": {
+              "type": "object",
+              "additionalProperties": false
+            }
           },
           "additionalProperties": false
         },
         {
           "description": "read_running_executors: return the workers and sessions that are currently alive. A session can outlive the worker that launched it, so the two lists are reported independently.",
           "type": "object",
-          "required": ["op"],
+          "required": [
+            "op"
+          ],
           "properties": {
-            "op": { "const": "read_running_executors" },
-            "params": { "type": "object", "additionalProperties": false }
+            "op": {
+              "const": "read_running_executors"
+            },
+            "params": {
+              "type": "object",
+              "additionalProperties": false
+            }
           },
           "additionalProperties": false
         },
         {
           "description": "read_campaign_coverage: return what this run has exercised so far: scenario, mode, the ordered list of barriers reached, the faults injected, and whether the run reached the run-complete barrier.",
           "type": "object",
-          "required": ["op"],
+          "required": [
+            "op"
+          ],
           "properties": {
-            "op": { "const": "read_campaign_coverage" },
-            "params": { "type": "object", "additionalProperties": false }
+            "op": {
+              "const": "read_campaign_coverage"
+            },
+            "params": {
+              "type": "object",
+              "additionalProperties": false
+            }
           },
           "additionalProperties": false
         },
         {
           "description": "collect_evidence: return the full evidence record for the run: scenario, mode, barriers reached, faults, the ordered per-tick event log, the identity mappings (work, generation, attempt, session, worker, effect, artifact), and snapshots of the ledger, the destination, and the running executors.",
           "type": "object",
-          "required": ["op"],
+          "required": [
+            "op"
+          ],
           "properties": {
-            "op": { "const": "collect_evidence" },
-            "params": { "type": "object", "additionalProperties": false }
+            "op": {
+              "const": "collect_evidence"
+            },
+            "params": {
+              "type": "object",
+              "additionalProperties": false
+            }
           },
           "additionalProperties": false
         }
@@ -168,7 +251,10 @@
     "observation": {
       "description": "One reply from the adapter to the driver. ok reports whether the op succeeded; data carries the op-specific result; error carries a diagnostic when ok is false.",
       "type": "object",
-      "required": ["op", "ok"],
+      "required": [
+        "op",
+        "ok"
+      ],
       "properties": {
         "op": {
           "type": "string",
@@ -187,8 +273,32 @@
         }
       },
       "additionalProperties": false,
-      "if": { "properties": { "ok": { "const": false } }, "required": ["ok"] },
-      "then": { "required": ["error"] }
+      "if": {
+        "properties": {
+          "ok": {
+            "const": false
+          }
+        },
+        "required": [
+          "ok"
+        ]
+      },
+      "then": {
+        "required": [
+          "error"
+        ]
+      },
+      "else": {
+        "required": [
+          "data"
+        ],
+        "not": {
+          "required": [
+            "error"
+          ]
+        },
+        "description": "A successful observation carries its result in data and no error field."
+      }
     }
   }
 }

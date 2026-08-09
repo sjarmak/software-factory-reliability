@@ -28,6 +28,6 @@ oracle:
     (fence disabled) must show the stale publish landing.
 evidence:
   status: fault-tested
-  drill: drills/stale-publish-after-reclaim.md
-  last_verified: "2026-08-05"
-  artifact: evidence/auth-stale-publish/run-2026-08-05.jsonl
+  drill: drills/stale-writer-completes/DRILL.md
+  last_verified: "2026-08-09"
+  artifact: examples/issue-to-pr/evidence/stale-writer-completes-protected.json

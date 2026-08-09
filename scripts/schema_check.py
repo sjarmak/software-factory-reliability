@@ -84,7 +84,7 @@ def validate_docs(path, schema_name, results):
         return
 
     validator_cls = jsonschema.validators.validator_for(schema)
-    validator = validator_cls(schema)
+    validator = validator_cls(schema, format_checker=jsonschema.FormatChecker())
     errors = []
     for doc in docs:
         for err in validator.iter_errors(doc):
@@ -110,7 +110,7 @@ def validate_json_file(path, schema_name, results):
         results.append((False, rel(path), f"JSON parse error: {err}"))
         return
     validator_cls = jsonschema.validators.validator_for(schema)
-    validator = validator_cls(schema)
+    validator = validator_cls(schema, format_checker=jsonschema.FormatChecker())
     errors = []
     for err in validator.iter_errors(doc):
         where = "/".join(str(p) for p in err.absolute_path) or "(root)"

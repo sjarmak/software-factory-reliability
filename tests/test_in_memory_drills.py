@@ -201,3 +201,76 @@ def test_observations_match_schema():
         observation = adapter.handle(command)
         assert observation["ok"] is True, observation
         jsonschema.validate(observation, SCHEMA)
+
+
+# Regression tests for the 2026-08-09 review findings.
+
+def test_fenced_publish_rejects_stale_generation_without_prior_artifact():
+    """The fence compares against current ownership, not artifact history;
+    the original implementation accepted any generation when no artifact
+    existed yet."""
+    from adapters.in_memory.model import Factory
+    f = Factory("dedup", "fenced", True)
+    f.add_work("w-1", generation=7)
+    f.start_worker("worker-1")
+    f.claim_work("w-1", attempt=1)
+    f.launch_session("w-1", "worker-1", attempt=1)
+    f.advance_generation("w-1")
+    assert f.publish("w-1", "artifact-g7", 7, "sess-1") is False
+    assert f.destination.artifact is None
+    assert f.publish("w-1", "artifact-g8", 8, "sess-1") is True
+
+
+def test_fenced_completion_rejects_stale_generation():
+    from adapters.in_memory.model import Factory
+    f = Factory("dedup", "fenced", True)
+    f.add_work("w-1", generation=7)
+    f.start_worker("worker-1")
+    f.claim_work("w-1", attempt=1)
+    f.launch_session("w-1", "worker-1", attempt=1)
+    f.advance_generation("w-1")
+    assert f.complete_work("w-1", "sess-1", attempt=1, generation=7) is False
+    assert f.work_items["w-1"].status != "completed"
+    assert any(e["kind"] == "completion-rejected-stale" for e in f.events)
+    assert f.complete_work("w-1", "sess-1", attempt=1, generation=8) is True
+
+
+def test_oracles_error_on_vacuous_evidence():
+    """An oracle must not pass on a final state that never saw the fault or
+    the dangerous operation; the original oracles did."""
+    from adapters.in_memory.run_drill import (
+        _oracle_worker_dies, _oracle_stale_writer, _oracle_effect_ack,
+        _oracle_event_lost)
+    vacuous = {
+        "events": [],
+        "authoritative_state": {
+            "claims": {"w-1": {"session_ids": ["sess-1"]}},
+            "effect_ledger": {},
+            "work_items": {"w-1": {"status": "completed"}},
+        },
+        "external_effects": {"mutations": [],
+                             "artifact": {"artifact_id": "artifact-g8"}},
+    }
+    for oracle in (_oracle_worker_dies, _oracle_stale_writer,
+                   _oracle_effect_ack, _oracle_event_lost):
+        verdict = oracle(vacuous)["verdict"]
+        assert verdict == "error", f"{oracle.__name__} returned {verdict}"
+
+
+@pytest.mark.parametrize("mode,expected_kind", [
+    ("protected", "completion-rejected-stale"),
+    ("unsafe", "outcome-accepted"),
+])
+def test_stale_writer_drill_exercises_stale_completion(tmp_path, mode,
+                                                       expected_kind):
+    """The drill drives a generation-7 completion attempt after takeover;
+    the fenced arm rejects it and the unsafe arm accepts it."""
+    from adapters.in_memory.run_drill import run_drill
+    run_drill("stale-writer-completes", mode, tmp_path)
+    evidence = json.loads(
+        (tmp_path / f"stale-writer-completes-{mode}.json").read_text())
+    stale_completions = [e for e in evidence["events"]
+                         if e.get("kind") == expected_kind
+                         and e.get("generation") == 7]
+    assert stale_completions, (
+        f"no {expected_kind} event for generation 7 in {mode} evidence")

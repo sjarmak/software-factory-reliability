@@ -6,6 +6,9 @@
 .beads/proxieddb/
 *.gate.lock*
 
+# OS noise
+.DS_Store
+
 # Build and run outputs
 out/
 __pycache__/

@@ -103,11 +103,16 @@ def _script_stale_writer(f: Factory, mode: str) -> list:
         f.publish(WORK_ID, state["g7_artifact"], 7, f.attempt_sessions[1],
                   observed_generation=state["g7_observed"])
 
+    def g7_stale_complete():
+        f.complete_work(WORK_ID, f.attempt_sessions[1], attempt=1,
+                        generation=7)
+
     return [
         ("action", "g7-prepare", g7_prepare),
         ("barrier", "before-publication", None),
         ("action", "g8-publish", g8_publish),
         ("action", "g7-stale-publish", g7_stale_publish),
+        ("action", "g7-stale-complete", g7_stale_complete),
         ("barrier", "run-complete", None),
     ]
 

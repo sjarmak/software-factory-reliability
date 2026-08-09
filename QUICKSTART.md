@@ -4,8 +4,9 @@ One session, under an hour: review a deliberately unsafe contract, compare it
 with a clean one, render, run a fault drill in both modes, then start a
 contract for your own factory.
 
-Requirements: Python 3.10 or later, plus `pyyaml` and `jsonschema`
-(`pip install pyyaml jsonschema`). Everything runs locally.
+Requirements: Python 3.10 or later, plus the packages in
+`requirements-dev.txt` (`pip install -r requirements-dev.txt`: pyyaml and
+jsonschema for the CLI, pytest for the test suite). Everything runs locally.
 
 ## 1. Validate the unsafe example
 
@@ -13,10 +14,10 @@ Requirements: Python 3.10 or later, plus `pyyaml` and `jsonschema`
 python3 cmd/factory-check/factory_check.py validate examples/unsafe-factory.yaml
 ```
 
-Expected shape of the output:
+Expected output:
 
 ```
-examples/unsafe-factory.yaml: valid against schemas/factory.schema.json
+examples/unsafe-factory.yaml: OK (factory.schema.json)
 ```
 
 Validation checks structure only. A contract can be schema-valid and still
@@ -28,26 +29,29 @@ promise nothing enforceable; that is the point of this example.
 python3 cmd/factory-check/factory_check.py review examples/unsafe-factory.yaml
 ```
 
-Expected shape of the findings (exact wording will differ; rule IDs are
-stable):
+The review prints each finding as a severity and rule id followed by the
+defect and a remediation hint. The first finding today:
 
 ```
-FAIL AUTH-002   workers.migrator: authority fence is checked by the caller,
-                not the destination; a stale writer that skips the check
-                still lands writes
-WARN VERIFY-001 promises.pr-merged: verification verdict is bound to a branch
-                name, not a commit id; the branch can move after the verdict
-FAIL CAMP-001   campaign.completion: completion is defined as "all children
-                finished", not "no unverified targets remain"; a lost child
-                ends the campaign early
-
-2 FAIL, 1 WARN
+FAIL AUTH-002
+  Fence enforced by the caller: between the caller's ownership check and its
+  write the claim can change hands, a time-of-check to time-of-use race.
+  Move enforcement to the destination side (publisher, destination, or
+  store), which evaluates the generation atomically with the write.
 ```
 
-Exit status is nonzero on any FAIL. Each rule ID maps to a pattern page:
+and the totals line for this contract is:
+
+```
+6 FAIL, 10 WARN
+```
+
+Exit status is nonzero on any FAIL. Each rule id maps to a pattern page:
 AUTH-002 to `patterns/fenced-authority.md`, VERIFY-001 to
 `patterns/verify-before-publish.md`, CAMP-001 to
-`patterns/cross-repo-campaigns.md`.
+`patterns/cross-repo-campaigns.md`. The totals are pinned by the test suite,
+so if your checkout prints different numbers, the catalog changed and this
+page is what needs updating.
 
 ## 3. Review a clean contract
 
@@ -81,30 +85,27 @@ will not read YAML.
 python3 -m adapters.in_memory.run_drill stale-writer-completes --mode unsafe
 ```
 
-Expected shape:
+Expected output:
 
 ```
-drill: stale-writer-completes  mode: unsafe
-inject: writer A stalls after its effect; writer B claims and completes
-violation: stale writer A's completion accepted after B's generation
-           became current
-evidence: out/evidence/stale-writer-completes-unsafe.jsonl
+drill stale-writer-completes (unsafe): oracle detected the expected
+violation; evidence out/evidence/stale-writer-completes-unsafe.json
 ```
 
 Exit status 2: the drill reproduced the violation, which is what the unsafe
-mode is for. The retained evidence file is the ordered event log; read it to
-see the exact acceptance of the stale write.
+mode is for. The evidence file holds the ordered per-tick event log, the
+identity mappings, and the oracle's verdict; read it to see the stale
+generation-7 write and completion being accepted after generation 8.
 
 ```
 python3 -m adapters.in_memory.run_drill stale-writer-completes --mode protected
 ```
 
-Expected shape:
+Expected output:
 
 ```
-drill: stale-writer-completes  mode: protected
-outcome: stale completion rejected by generation check at the ledger
-evidence: out/evidence/stale-writer-completes-protected.jsonl
+drill stale-writer-completes (protected): oracle pass; evidence
+out/evidence/stale-writer-completes-protected.json
 ```
 
 Exit status 0. Same fault, same timing; the difference is a fence checked at

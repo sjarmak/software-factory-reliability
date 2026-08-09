@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 
 import yaml
-from jsonschema import Draft202012Validator
+from jsonschema import Draft202012Validator, FormatChecker
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
@@ -85,13 +85,16 @@ def _pick_schema_name(doc):
             return "guarantee.schema.json"
         if "work_id" in doc and "attempt_id" in doc:
             return "work-manifest.schema.json"
+        if "effect_identity" in doc and "destination" in doc:
+            return "effect.schema.json"
     return "factory.schema.json"
 
 
 def _validator_for(schema_name, cache):
     if schema_name not in cache:
         schema = json.loads((SCHEMA_DIR / schema_name).read_text())
-        cache[schema_name] = Draft202012Validator(schema)
+        cache[schema_name] = Draft202012Validator(
+            schema, format_checker=FormatChecker())
     return cache[schema_name]
 
 
@@ -117,9 +120,13 @@ def _validate_one(path, cache):
 
 
 def cmd_init(args):
-    out_dir = Path(args.out)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    target = out_dir / "factory.yaml"
+    if args.target:
+        target = Path(args.target)
+        target.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        out_dir = Path(args.out)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        target = out_dir / "factory.yaml"
     if target.exists():
         print(f"{target}: already exists; refusing to overwrite")
         return 1
@@ -196,6 +203,8 @@ def main(argv=None):
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_init = sub.add_parser("init", help="write a commented starter factory.yaml")
+    p_init.add_argument("target", nargs="?", default=None,
+                        help="file to write (default: factory.yaml in --out)")
     p_init.add_argument("--out", default=".", help="directory to write factory.yaml into")
     p_init.set_defaults(func=cmd_init)
 

@@ -5,7 +5,14 @@
   "description": "Declares one attempt's intended change against the code estate before it publishes, so concurrent work on overlapping code is discoverable by other workers and by campaign accounting. Written at claim time, updated as the attempt progresses, and resolved at publication. A manifest is a statement of intent plus evidence, not authority: the fact store remains authoritative for who owns the work.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["work_id", "attempt_id", "generation", "repository", "base_revision", "publication_state"],
+  "required": [
+    "work_id",
+    "attempt_id",
+    "generation",
+    "repository",
+    "base_revision",
+    "publication_state"
+  ],
   "properties": {
     "campaign_id": {
       "type": "string",
@@ -57,7 +64,11 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["type", "symbol", "source_revision"],
+        "required": [
+          "type",
+          "symbol",
+          "source_revision"
+        ],
         "description": "One piece of evidence that a symbol belongs in this change, pinned to the revision where it was observed.",
         "properties": {
           "type": {
@@ -108,8 +119,71 @@
       "description": "Identity of the verification run attesting to artifact_digest, once verification has run."
     },
     "publication_state": {
-      "enum": ["planned", "in_progress", "prepared", "published", "blocked", "abandoned"],
+      "enum": [
+        "planned",
+        "in_progress",
+        "prepared",
+        "published",
+        "blocked",
+        "abandoned"
+      ],
       "description": "Where this change is in its publication lifecycle. planned: claimed, no edits yet. in_progress: edits underway. prepared: artifact built and verified, awaiting publication. published: the effect landed at the destination. blocked: cannot proceed without intervention. abandoned: deliberately ended without publishing; the manifest stays as a record."
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "publication_state": {
+            "enum": [
+              "prepared",
+              "published"
+            ]
+          }
+        },
+        "required": [
+          "publication_state"
+        ]
+      },
+      "then": {
+        "required": [
+          "work_id",
+          "attempt_id",
+          "generation",
+          "repository",
+          "base_revision",
+          "publication_state",
+          "artifact_digest",
+          "head_revision"
+        ],
+        "description": "A prepared or published manifest names the exact immutable artifact: digest and head revision are required."
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "publication_state": {
+            "const": "published"
+          }
+        },
+        "required": [
+          "publication_state"
+        ]
+      },
+      "then": {
+        "required": [
+          "work_id",
+          "attempt_id",
+          "generation",
+          "repository",
+          "base_revision",
+          "publication_state",
+          "artifact_digest",
+          "head_revision",
+          "verification_id"
+        ],
+        "description": "A published manifest additionally carries the verification that was bound to that digest; publication without verification identity is exactly the drift the kit warns about."
+      }
+    }
+  ]
 }

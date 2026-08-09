@@ -5,7 +5,14 @@
   "description": "One entry in a factory's guarantee ledger: a precise claim, the owner accountable for it, the mechanism that provides it, the oracle that would catch its violation, and the current evidence status. The ledger's ground rule: documentation alone never raises the status; only an enforcing mechanism in the running system, or a passing fault drill, does.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["id", "claim", "owner", "mechanism", "oracle", "evidence"],
+  "required": [
+    "id",
+    "claim",
+    "owner",
+    "mechanism",
+    "oracle",
+    "evidence"
+  ],
   "properties": {
     "id": {
       "type": "string",
@@ -25,7 +32,10 @@
     "mechanism": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "inputs"],
+      "required": [
+        "type",
+        "inputs"
+      ],
       "description": "The mechanism that provides the guarantee, and the identities or facts it consumes. Naming the inputs makes it checkable that the mechanism sees the identities the claim is about.",
       "properties": {
         "type": {
@@ -48,7 +58,10 @@
     "oracle": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "assertion"],
+      "required": [
+        "type",
+        "assertion"
+      ],
       "description": "The check that would catch the claim being false. An oracle that cannot fail is not an oracle; where a negative control exists, the assertion states what the control is expected to do.",
       "properties": {
         "type": {
@@ -66,11 +79,17 @@
     "evidence": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["status"],
+      "required": [
+        "status"
+      ],
       "description": "Current evidence backing the claim. Statuses only move up with evidence, and they decay: an enforced mechanism that was refactored, or a drill that has not run since the system changed, warrants demotion.",
       "properties": {
         "status": {
-          "enum": ["declared", "enforced", "fault-tested"],
+          "enum": [
+            "declared",
+            "enforced",
+            "fault-tested"
+          ],
           "description": "declared: the claim is written down and nothing checks it. enforced: a mechanism in the running system rejects violations. fault-tested: a drill injected the fault, the oracle caught the violation on the negative control, and the protected arm passed."
         },
         "drill": {
@@ -91,5 +110,39 @@
         }
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "evidence": {
+            "properties": {
+              "status": {
+                "const": "fault-tested"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          }
+        },
+        "required": [
+          "evidence"
+        ]
+      },
+      "then": {
+        "properties": {
+          "evidence": {
+            "required": [
+              "status",
+              "drill",
+              "last_verified",
+              "artifact"
+            ]
+          }
+        },
+        "description": "fault-tested is an evidence claim, so the drill that ran, the date it ran, and the retained artifact are required; a fault-tested status with no evidence trail is a declared status wearing the wrong label."
+      }
+    }
+  ]
 }

@@ -32,81 +32,205 @@ class DrillError(Exception):
     """A protocol op failed while driving the drill."""
 
 
-def _oracle_worker_dies(state: dict, effects: dict) -> dict:
-    """Counts sessions bound to the claim. One session per claim is the
-    invariant; a second session against the same worktree is the violation."""
+def _first_tick(events: list, kind: str, **match) -> int | None:
+    """Tick of the first event of this kind whose fields match, else None."""
+    for event in events:
+        if event.get("kind") != kind:
+            continue
+        if all(event.get(k) == v for k, v in match.items()):
+            return event["tick"]
+    return None
+
+
+def _preconditions_failed(missing: list, name: str, description: str) -> dict:
+    return {
+        "name": name,
+        "description": description,
+        "expected": "drill preconditions observed in the event log",
+        "observed": {"missing_preconditions": missing},
+        "detail": {},
+        "verdict": "error",
+    }
+
+
+def _oracle_worker_dies(evidence: dict) -> dict:
+    """One session per claim after retry. The verdict only counts if the
+    event log shows the fault and the retry actually happened: a worker
+    death with a surviving session, then a second attempt. Without those
+    preconditions a single bound session proves nothing."""
+    events = evidence["events"]
+    state = evidence["authoritative_state"]
+    description = ("A worker died leaving a surviving session, a retry ran, "
+                   "and exactly one session is bound to the claim.")
+    missing = []
+    kill_tick = None
+    for event in events:
+        if event.get("kind") == "worker-killed" and event.get("surviving_sessions"):
+            kill_tick = event["tick"]
+            break
+    if kill_tick is None:
+        missing.append("worker-killed with a surviving session")
+    retry_tick = None
+    for kind in ("session-attached", "session-launched"):
+        tick = _first_tick(events, kind, attempt=2)
+        if tick is not None and (retry_tick is None or tick < retry_tick):
+            retry_tick = tick
+    if retry_tick is None or (kill_tick is not None and retry_tick <= kill_tick):
+        missing.append("attempt-2 launch or attach after the worker death")
+    if _first_tick(events, "outcome-accepted") is None:
+        missing.append("an accepted outcome (the run finished its work)")
+    if missing:
+        return _preconditions_failed(missing, "one-session-per-claim", description)
     claim = state["claims"].get(WORK_ID)
     bound = claim["session_ids"] if claim else []
     observed = len(bound)
-    if observed == 1:
-        verdict = "pass"
-    elif observed > 1:
-        verdict = "violation"
-    else:
-        verdict = "error"
+    verdict = "pass" if observed == 1 else ("violation" if observed > 1 else "error")
     return {
         "name": "one-session-per-claim",
-        "description": "Exactly one session is bound to the claim for the "
-                       "work item after retry.",
+        "description": description,
         "expected": 1,
         "observed": observed,
-        "detail": {"session_ids": bound},
+        "detail": {"session_ids": bound, "kill_tick": kill_tick,
+                   "retry_tick": retry_tick},
         "verdict": verdict,
     }
 
 
-def _oracle_stale_writer(state: dict, effects: dict) -> dict:
-    """Compares the authoritative artifact at the destination to the stale
-    generation-7 artifact."""
+def _oracle_stale_writer(evidence: dict) -> dict:
+    """The stale generation must actually return and act after replacement,
+    and both its publication and its completion must be rejected. A current
+    artifact with no stale attempt on record is not a pass."""
+    events = evidence["events"]
+    effects = evidence["external_effects"]
+    description = ("After ownership advanced to generation 8 and generation 8 "
+                   "published, the returning generation-7 writer attempted "
+                   "publication and completion; the destination holds the "
+                   "generation-8 artifact and both stale attempts were "
+                   "rejected.")
+    missing = []
+    if _first_tick(events, "lease-expired") is None:
+        missing.append("the injected lease expiry")
+    if _first_tick(events, "generation-advanced", generation=8) is None:
+        missing.append("ownership advancing to generation 8")
+    g8_tick = None
+    for kind in ("publish-accepted", "publish-unfenced-applied"):
+        tick = _first_tick(events, kind, generation=8)
+        if tick is not None:
+            g8_tick = tick
+            break
+    if g8_tick is None:
+        missing.append("generation 8 publishing")
+    g7_publish_kind = None
+    g7_publish_tick = None
+    for kind in ("publish-rejected-stale", "publish-unfenced-applied",
+                 "publish-unfenced-skipped", "publish-accepted"):
+        tick = _first_tick(events, kind, generation=7)
+        if tick is not None and g8_tick is not None and tick > g8_tick:
+            g7_publish_kind = kind
+            g7_publish_tick = tick
+            break
+    if g7_publish_tick is None:
+        missing.append("a stale generation-7 publish attempt after generation 8")
+    g7_complete_kind = None
+    for kind in ("completion-rejected-stale", "outcome-accepted"):
+        tick = _first_tick(events, kind, generation=7)
+        if tick is not None:
+            g7_complete_kind = kind
+            break
+    if g7_complete_kind is None:
+        missing.append("a stale generation-7 completion attempt")
+    if missing:
+        return _preconditions_failed(
+            missing, "stale-writer-rejected-at-destination", description)
     artifact = effects["artifact"]
-    current_id = "artifact-g8"
-    stale_id = "artifact-g7"
-    if artifact is None:
-        verdict = "error"
-    elif artifact["artifact_id"] == current_id:
-        verdict = "pass"
-    elif artifact["artifact_id"] == stale_id:
-        verdict = "violation"
-    else:
-        verdict = "error"
+    artifact_id = artifact["artifact_id"] if artifact else None
+    held = (artifact_id == "artifact-g8"
+            and g7_publish_kind in ("publish-rejected-stale",
+                                    "publish-unfenced-skipped")
+            and g7_complete_kind == "completion-rejected-stale")
+    breached = (artifact_id == "artifact-g7"
+                or g7_publish_kind in ("publish-unfenced-applied",
+                                       "publish-accepted")
+                or g7_complete_kind == "outcome-accepted")
+    verdict = "pass" if held else ("violation" if breached else "error")
     return {
-        "name": "authoritative-artifact-is-current-generation",
-        "description": "The published artifact at the destination is the "
-                       "generation-8 artifact, not the stale generation-7 "
-                       "artifact.",
-        "expected": current_id,
-        "observed": artifact["artifact_id"] if artifact else None,
-        "detail": {"artifact": artifact, "stale_artifact_id": stale_id},
+        "name": "stale-writer-rejected-at-destination",
+        "description": description,
+        "expected": {"artifact": "artifact-g8",
+                     "stale_publish": "publish-rejected-stale",
+                     "stale_completion": "completion-rejected-stale"},
+        "observed": {"artifact": artifact_id,
+                     "stale_publish": g7_publish_kind,
+                     "stale_completion": g7_complete_kind},
+        "detail": {"g8_publish_tick": g8_tick,
+                   "g7_publish_tick": g7_publish_tick},
         "verdict": verdict,
     }
 
 
-def _oracle_effect_ack(state: dict, effects: dict) -> dict:
-    """Counts destination mutations carrying the effect identity."""
-    mutations = [m for m in effects["mutations"]
-                 if m["effect_id"] == EFFECT_ID]
+def _oracle_effect_ack(evidence: dict) -> dict:
+    """One destination mutation per effect identity, and only after the log
+    shows the acknowledgement was actually lost and a retry actually sent
+    the same effect identity again."""
+    events = evidence["events"]
+    effects = evidence["external_effects"]
+    description = ("The acknowledgement was dropped, a second attempt "
+                   "re-sent the effect identity, and the destination holds "
+                   "exactly one mutation for it.")
+    missing = []
+    drop_tick = _first_tick(events, "ack-dropped")
+    if drop_tick is None:
+        missing.append("the dropped acknowledgement")
+    retry_tick = None
+    for kind in ("effect-applied", "effect-deduplicated"):
+        tick = _first_tick(events, kind, attempt=2)
+        if tick is not None:
+            retry_tick = tick
+            break
+    if retry_tick is None or (drop_tick is not None and retry_tick <= drop_tick):
+        missing.append("an attempt-2 retry of the effect after the drop")
+    if missing:
+        return _preconditions_failed(
+            missing, "one-mutation-per-effect-identity", description)
+    mutations = [m for m in effects["mutations"] if m["effect_id"] == EFFECT_ID]
     observed = len(mutations)
-    if observed == 1:
-        verdict = "pass"
-    elif observed > 1:
-        verdict = "violation"
-    else:
-        verdict = "error"
+    verdict = "pass" if observed == 1 else ("violation" if observed > 1 else "error")
     return {
         "name": "one-mutation-per-effect-identity",
-        "description": "The destination holds exactly one mutation for the "
-                       "effect identity after the retry.",
+        "description": description,
         "expected": 1,
         "observed": observed,
-        "detail": {"mutations": mutations},
+        "detail": {"mutations": mutations, "drop_tick": drop_tick,
+                   "retry_tick": retry_tick},
         "verdict": verdict,
     }
 
 
-def _oracle_event_lost(state: dict, effects: dict) -> dict:
-    """Compares the ledger to destination state: the ledger must hold the
-    destination's receipt for the effect and the work item must be
-    completed."""
+def _oracle_event_lost(evidence: dict) -> dict:
+    """Ledger converges with the destination, and only after the log shows
+    the ledger-update event was actually dropped and a reconciliation pass
+    (or its documented absence) actually ran."""
+    events = evidence["events"]
+    state = evidence["authoritative_state"]
+    effects = evidence["external_effects"]
+    description = ("The ledger-update event was dropped; reconciliation ran "
+                   "(or was absent by configuration); the ledger holds the "
+                   "destination's receipt and the work item is completed.")
+    missing = []
+    drop_tick = _first_tick(events, "ledger-update-dropped")
+    if drop_tick is None:
+        missing.append("the dropped ledger-update event")
+    repair_tick = None
+    for kind in ("reconciled", "reconciler-absent"):
+        tick = _first_tick(events, kind)
+        if tick is not None:
+            repair_tick = tick
+            break
+    if repair_tick is None or (drop_tick is not None and repair_tick <= drop_tick):
+        missing.append("a reconciliation pass (or explicit absence) after the drop")
+    if missing:
+        return _preconditions_failed(
+            missing, "ledger-matches-destination", description)
     receipts = [m["receipt"] for m in effects["mutations"]
                 if m["effect_id"] == EFFECT_ID]
     ledger_record = state["effect_ledger"].get(EFFECT_ID)
@@ -125,12 +249,11 @@ def _oracle_event_lost(state: dict, effects: dict) -> dict:
         verdict = "pass" if converged else "violation"
     return {
         "name": "ledger-matches-destination",
-        "description": "The ledger records the destination's effect receipt "
-                       "and the work item is completed; a stale ledger after "
-                       "a dropped event is the violation.",
+        "description": description,
         "expected": {"ledger_has_receipt": True, "work_status": "completed"},
         "observed": observed,
-        "detail": {"destination_receipts": receipts},
+        "detail": {"destination_receipts": receipts, "drop_tick": drop_tick,
+                   "repair_tick": repair_tick},
         "verdict": verdict,
     }
 
@@ -214,7 +337,6 @@ def run_drill(drill: str, mode: str,
         print(f"drill {drill} ({mode}): {exc}", file=sys.stderr)
         return 1
 
-    oracle = spec.oracle(state, effects)
     evidence = {
         "scenario": drill,
         "mode": mode,
@@ -227,8 +349,9 @@ def run_drill(drill: str, mode: str,
         "authoritative_state": state,
         "external_effects": effects,
         "running_executors": executors,
-        "oracle": oracle,
     }
+    oracle = spec.oracle(evidence)
+    evidence["oracle"] = oracle
     out_path = Path(out_dir)
     out_path.mkdir(parents=True, exist_ok=True)
     evidence_file = out_path / f"{drill}-{mode}.json"
@@ -237,8 +360,11 @@ def run_drill(drill: str, mode: str,
 
     verdict = oracle["verdict"]
     if mode == "protected" and verdict == "pass":
+        print(f"drill {drill} (protected): oracle pass; evidence {evidence_file}")
         return 0
     if mode == "unsafe" and verdict == "violation":
+        print(f"drill {drill} (unsafe): oracle detected the expected "
+              f"violation; evidence {evidence_file}")
         return 2
     print(f"drill {drill} ({mode}): unexpected oracle verdict {verdict!r}; "
           f"expected {'pass' if mode == 'protected' else 'violation'}; "

@@ -1,0 +1,6 @@
+# Development and runtime dependencies for the kit's Python tooling.
+# The CLI and simulator need pyyaml and jsonschema; the test suite needs
+# pytest. Install with: pip install -r requirements-dev.txt
+PyYAML>=6.0
+jsonschema>=4.18
+pytest>=7.0

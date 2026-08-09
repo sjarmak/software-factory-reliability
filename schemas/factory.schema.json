@@ -5,7 +5,10 @@
   "description": "Declares the reliability contract of one software factory: which systems hold authority over facts, procedure, policy, and effects; how work, attempts, and sessions are identified; how ownership is claimed and fenced; how artifacts are verified and published; how external effects behave under retry; and how the factory reconciles, schedules, and observes itself. Sections may be omitted where genuinely not applicable; the review command reports each absence as an explicit not-declared finding rather than passing silently. The string \"unknown\" is accepted wherever a builder has not decided yet, so an undecided contract can still be recorded and reviewed; review rules flag undecided values instead of the schema rejecting them.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["version", "factory"],
+  "required": [
+    "version",
+    "factory"
+  ],
   "properties": {
     "version": {
       "const": "factory.reliability/v1",
@@ -14,7 +17,9 @@
     "factory": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name"],
+      "required": [
+        "name"
+      ],
       "description": "Identity of the factory this contract describes.",
       "properties": {
         "name": {
@@ -50,7 +55,11 @@
     "work": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["logical_identity", "attempt_identity", "session_identity"],
+      "required": [
+        "logical_identity",
+        "attempt_identity",
+        "session_identity"
+      ],
       "description": "How work is identified and owned. Three identity classes must stay distinct: the logical work item (stable across every retry), the delivery attempt (a new one per retry), and the executor session (which can outlive the attempt that launched it). Conflating them is the root of most duplicate-effect and stale-writer failures.",
       "properties": {
         "logical_identity": {
@@ -71,7 +80,10 @@
         "ownership": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["generation", "lease_expiry"],
+          "required": [
+            "generation",
+            "lease_expiry"
+          ],
           "description": "How exclusive ownership of a work item is claimed and defended. Both halves are needed: the lease bounds how long a dead owner can block progress, and the generation fences a stale owner that wakes up after replacement. Either one alone leaves a failure mode open.",
           "properties": {
             "generation": {
@@ -87,7 +99,10 @@
             "fence": {
               "type": "object",
               "additionalProperties": false,
-              "required": ["enforced_by", "operation"],
+              "required": [
+                "enforced_by",
+                "operation"
+              ],
               "description": "Where and how the stale-writer fence is enforced. The schema only requires that both values be declared; the review rules judge them. A caller-side check, or any read-then-write sequence, leaves a time-of-check to time-of-use window between validating ownership and acting on it.",
               "properties": {
                 "enforced_by": {
@@ -109,7 +124,9 @@
     "artifacts": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["identity"],
+      "required": [
+        "identity"
+      ],
       "description": "How build artifacts are identified, verified, and published. The chain holds only if verification binds to the same immutable identity the artifact carries, and publication rechecks both ownership and that binding at the destination.",
       "properties": {
         "identity": {
@@ -120,7 +137,10 @@
         "verification": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["identity", "binds_to"],
+          "required": [
+            "identity",
+            "binds_to"
+          ],
           "description": "How verification runs are identified and what they attest. When this block is absent, completion rests on worker self-report, and the review command reports that explicitly.",
           "properties": {
             "identity": {
@@ -138,7 +158,9 @@
         "publication": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["conditions"],
+          "required": [
+            "conditions"
+          ],
           "description": "Conditions rechecked atomically at publication time, at the destination. Publication is the last fence: it must confirm the publisher still holds the current generation and that the verification evidence matches the exact artifact being published.",
           "properties": {
             "conditions": {
@@ -177,7 +199,9 @@
         "capacity": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["total"],
+          "required": [
+            "total"
+          ],
           "description": "Overall capacity of the factory's execution pool.",
           "properties": {
             "total": {
@@ -197,7 +221,9 @@
         "fairness": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["levels"],
+          "required": [
+            "levels"
+          ],
           "description": "Hierarchical fairness applied within and across classes.",
           "properties": {
             "levels": {
@@ -217,7 +243,9 @@
     "code_estate": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["canonical_identity"],
+      "required": [
+        "canonical_identity"
+      ],
       "description": "How the factory names and tracks the code it operates on. Pinning work to repository plus revision makes concurrent campaigns and in-flight work collision-detectable before publication instead of at merge time.",
       "properties": {
         "canonical_identity": {
@@ -240,7 +268,9 @@
     "campaigns": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["completion"],
+      "required": [
+        "completion"
+      ],
       "description": "Contract for multi-target campaigns run by this factory. The load-bearing choice is the completion rule: what the factory accepts as proof that a campaign is finished.",
       "properties": {
         "completion": {
@@ -253,7 +283,11 @@
               "type": "array",
               "minItems": 1,
               "items": {
-                "enum": ["published", "exempted", "blocked_with_owner"],
+                "enum": [
+                  "published",
+                  "exempted",
+                  "blocked_with_owner"
+                ],
                 "description": "One accountable end state a target may carry."
               },
               "description": "The disposition-based completion rule: a campaign is complete when every target in the current discovery snapshot carries one of these dispositions. published: the change landed. exempted: deliberately out of scope, with the reason recorded. blocked_with_owner: cannot proceed, and a named owner holds it."
@@ -265,7 +299,9 @@
     "observability": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["promises"],
+      "required": [
+        "promises"
+      ],
       "description": "Which lifecycle promises the factory monitors. A promise is a bounded expectation that one state leads to the next; a broken promise is an actionable fact even when no component reports an error.",
       "properties": {
         "promises": {
@@ -285,7 +321,9 @@
     "authority": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["system"],
+      "required": [
+        "system"
+      ],
       "description": "One authority assignment: which system holds it and, optionally, where inside that system the authoritative state lives.",
       "properties": {
         "system": {
@@ -303,7 +341,12 @@
     "effect": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "destination", "effect_identity", "retry_contract"],
+      "required": [
+        "name",
+        "destination",
+        "effect_identity",
+        "retry_contract"
+      ],
       "description": "One class of external effect the factory performs. Procedure retries redeliver work, so every effect must state how the destination behaves when the same logical effect is attempted twice, and what the factory does when an attempt's outcome is unknown.",
       "properties": {
         "name": {
@@ -322,7 +365,12 @@
           "description": "Stable logical identity of one intended effect, carried unchanged across retries. If this identity embeds the attempt identity, every retry mints a new effect and deduplication becomes impossible; the review rules flag that pattern. Use \"unknown\" if not yet decided."
         },
         "retry_contract": {
-          "enum": ["deduplicate", "converge", "reconcile", "unknown"],
+          "enum": [
+            "deduplicate",
+            "converge",
+            "reconcile",
+            "unknown"
+          ],
           "description": "What holds when the same effect_identity is submitted more than once. deduplicate: the destination atomically stores the identity with the effect and returns the original receipt for repeats. converge: the operation is idempotent, so repeating it reaches the same final state. reconcile: the caller queries the destination for a prior effect (see readback) before repeating; weaker than destination deduplication, and it assumes callers for one identity are serialized. \"unknown\" records that the builder has not decided; the review rules flag it."
         },
         "readback": {
@@ -331,7 +379,12 @@
           "description": "Query used to find a previously applied effect at the destination, for example find_by_head_reference. Needed whenever retry_contract is reconcile; without it the caller cannot learn whether the prior attempt landed."
         },
         "unknown_state_policy": {
-          "enum": ["block_and_escalate", "reconcile_then_block", "manual_review", "unknown"],
+          "enum": [
+            "block_and_escalate",
+            "reconcile_then_block",
+            "manual_review",
+            "unknown"
+          ],
           "description": "What the factory does when an attempt's outcome cannot be determined (timeout, crash after send, lost response). Every allowed policy stops and surfaces the ambiguity: block_and_escalate, reconcile_then_block, manual_review. Assuming success or assuming failure are both unsound (one loses the effect, the other duplicates it) and are schema-invalid values. \"unknown\" records indecision. Optional at the schema level so partial contracts can be recorded; the review rules treat absence as a failure finding."
         }
       }
@@ -339,7 +392,10 @@
     "reconciliationEntry": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["fact", "query"],
+      "required": [
+        "fact",
+        "query"
+      ],
       "description": "One periodic reconciliation loop: a named external fact, the query that refreshes it from the authoritative source, and how often the query runs.",
       "properties": {
         "fact": {
@@ -356,6 +412,11 @@
           "type": "string",
           "pattern": "^([0-9]+(ms|s|m|h|d)|unknown)$",
           "description": "How often the query runs, as a duration such as 30s, 5m, or 1h. \"unknown\" records that the cadence is not decided yet."
+        },
+        "destination": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Effect destination this entry rereads, matching an effects[].destination value exactly. Declaring it makes reconciliation coverage explicit; without it, coverage is inferred from name overlap, which can be wrong in both directions."
         }
       }
     },

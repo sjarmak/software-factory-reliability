@@ -60,12 +60,15 @@ def authority_map(doc):
     lines.append("  auth_procedure -->|revalidates ownership against| auth_facts")
     lines.append("  auth_policy -->|admits and places work using| auth_facts")
     lines.append("  auth_effects -->|claims and fences through| auth_facts")
+    entries = _recon(doc)
+    for effect in _effects(doc):
+        destination = effect.get("destination", "unknown")
+        if any(rules.entry_covers_effect(entry, effect) for entry in entries):
+            edge = f'  {_node_id("ext", destination)} -.->|reconciled into| auth_facts'
+            if edge not in lines:
+                lines.append(edge)
     for destination in destinations:
         lines.append(f'  auth_effects -->|mutates| {_node_id("ext", destination)}')
-    if _recon(doc):
-        for destination in destinations:
-            lines.append(
-                f'  {_node_id("ext", destination)} -.->|reconciled into| auth_facts')
     return "\n".join(lines) + "\n"
 
 
@@ -108,7 +111,7 @@ def effect_matrix(doc):
         covering = [
             str(entry.get("fact", ""))
             for entry in recon
-            if rules.entry_covers_effect(entry.get("fact", ""), entry.get("query", ""), effect)
+            if rules.entry_covers_effect(entry, effect)
         ]
         row = [
             str(effect.get("name", "not declared")),
@@ -121,6 +124,18 @@ def effect_matrix(doc):
         ]
         lines.append("| " + " | ".join(row) + " |")
     return "\n".join(lines) + "\n"
+
+
+def _evidence_path_exists(reference, contract_path):
+    """Resolve a claimed evidence path against the working directory and the
+    contract's directory tree; a fault-tested claim whose evidence resolves
+    nowhere is reported, not displayed as tested."""
+    candidate = Path(str(reference))
+    if candidate.is_absolute():
+        return candidate.exists()
+    roots = [Path.cwd()]
+    roots.extend(Path(contract_path).resolve().parents)
+    return any((root / candidate).exists() for root in roots)
 
 
 def guarantee_ledger(doc, contract_path):
@@ -143,9 +158,16 @@ def guarantee_ledger(doc, contract_path):
     for _, g in entries:
         evidence = g.get("evidence") if isinstance(g.get("evidence"), dict) else {}
         mechanism = g.get("mechanism") if isinstance(g.get("mechanism"), dict) else {}
+        status = str(evidence.get("status", "not recorded"))
+        if status == "fault-tested":
+            missing = [k for k in ("drill", "artifact")
+                       if evidence.get(k)
+                       and not _evidence_path_exists(evidence[k], contract_path)]
+            if missing:
+                status = "fault-tested (EVIDENCE MISSING: " + ", ".join(missing) + ")"
         lines.append("| " + " | ".join([
             str(g.get("id", "unnamed")),
-            str(evidence.get("status", "not recorded")),
+            status,
             str(g.get("owner", "not recorded")),
             str(mechanism.get("type", "not recorded")),
             str(evidence.get("last_verified", "never")),
@@ -158,7 +180,9 @@ def guarantee_ledger(doc, contract_path):
         evidence = g.get("evidence") if isinstance(g.get("evidence"), dict) else {}
         for key in ("drill", "artifact"):
             if evidence.get(key):
-                lines.append(f"- {key}: {evidence[key]}")
+                found = _evidence_path_exists(evidence[key], contract_path)
+                suffix = "" if found else "  (path does not resolve)"
+                lines.append(f"- {key}: {evidence[key]}{suffix}")
     return "\n".join(lines) + "\n"
 
 

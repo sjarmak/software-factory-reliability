@@ -66,21 +66,29 @@ def _recon_entries(doc):
     section = doc.get("reconciliation")
     if not isinstance(section, list):
         return []
-    return [
-        (str(e.get("fact", "")), str(e.get("query", "")))
-        for e in section
-        if isinstance(e, dict)
-    ]
+    return [e for e in section if isinstance(e, dict)]
 
 
-def entry_covers_effect(entry_fact, entry_query, effect):
+def entry_covers_effect(entry, effect):
+    """An entry with an explicit destination covers exactly the effects of
+    that destination. Entries without one fall back to token overlap, which
+    is weaker evidence in both directions."""
+    declared = entry.get("destination")
+    if _declared(declared):
+        return declared == effect.get("destination")
+    entry_tokens = tokens(entry.get("fact")) | tokens(entry.get("query"))
     effect_tokens = tokens(effect.get("name")) | tokens(effect.get("destination"))
-    return bool((tokens(entry_fact) | tokens(entry_query)) & effect_tokens)
+    return bool(entry_tokens & effect_tokens)
+
+
+def _decided_number(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
 def review(doc):
     findings = []
     work = _get_dict(doc, "work")
+    _check_authorities(doc, findings)
     _check_identity(doc, work, findings)
     _check_ownership(work, findings)
     _check_effects(doc, work, findings)
@@ -90,6 +98,23 @@ def review(doc):
     _check_campaigns(doc, findings)
     _check_observability(doc, findings)
     return findings
+
+
+def _check_authorities(doc, findings):
+    authorities = _get_dict(doc, "authorities")
+    planes = ("facts", "procedure", "policy", "effects")
+    if authorities is None:
+        missing = list(planes)
+    else:
+        missing = [p for p in planes
+                   if not _declared((_get_dict(authorities, p) or {}).get("system"))]
+    if missing:
+        findings.append(Finding(
+            "AUTH-000", "WARN",
+            "Authority planes undeclared or undecided: " + ", ".join(missing) +
+            ". Without named authorities, one layer can silently impersonate another.",
+            "Name the system that owns each plane: facts, procedure, policy, and effects.",
+            "authorities"))
 
 
 def _check_identity(doc, work, findings):
@@ -207,11 +232,17 @@ def _check_effects(doc, work, findings):
                 "Decide deduplicate, converge, or reconcile for this destination.",
                 f"{path}.retry_contract"))
         policy = effect.get("unknown_state_policy")
-        if policy is None or policy in UNSOUND_POLICIES:
+        if policy in UNSOUND_POLICIES:
             findings.append(Finding(
                 "EFFECT-003", "FAIL",
-                f"Effect {name} has no sound unknown_state_policy; assuming success loses the effect and assuming failure duplicates it.",
+                f"Effect {name} has unknown_state_policy {policy}; assuming success loses the effect and assuming failure duplicates it.",
                 "Declare block_and_escalate, reconcile_then_block, or manual_review so an ambiguous outcome stops and surfaces.",
+                f"{path}.unknown_state_policy"))
+        elif not _declared(policy):
+            findings.append(Finding(
+                "EFFECT-003", "FAIL",
+                f"Effect {name} has an undecided unknown_state_policy; an ambiguous outcome will be resolved ad hoc under incident pressure.",
+                "Decide block_and_escalate, reconcile_then_block, or manual_review before the ambiguity happens.",
                 f"{path}.unknown_state_policy"))
         if contract == "reconcile" and not _declared(effect.get("readback")):
             findings.append(Finding(
@@ -221,9 +252,26 @@ def _check_effects(doc, work, findings):
                 f"{path}.readback"))
 
 
+MUTABLE_IDENTITY_TOKENS = {"branch", "ref", "head", "tag", "latest"}
+SELF_REPORT_TOKENS = {"self", "testimony"}
+
+
 def _check_artifacts(doc, findings):
     artifacts = _get_dict(doc, "artifacts")
+    identity_value = artifacts.get("identity") if artifacts else None
+    if artifacts and tokens(identity_value) & MUTABLE_IDENTITY_TOKENS:
+        findings.append(Finding(
+            "VERIFY-004", "FAIL",
+            f"Artifact identity {identity_value!r} names a mutable reference; whatever it points at can change between verification and publication.",
+            "Identify artifacts by an immutable value such as a commit digest; a branch or tag is a pointer, not an identity.",
+            "artifacts.identity"))
     verification = _get_dict(artifacts, "verification") if artifacts else None
+    if verification and tokens(verification.get("identity")) & SELF_REPORT_TOKENS:
+        findings.append(Finding(
+            "VERIFY-005", "FAIL",
+            f"Verification identity {verification.get('identity')!r} names worker testimony; the worker's claim of completion is the hypothesis, not the observation that establishes it.",
+            "Verify through an independent mechanism (CI run, repository state) whose record binds to the artifact identity.",
+            "artifacts.verification.identity"))
     if verification is None:
         findings.append(Finding(
             "VERIFY-003", "WARN",
@@ -266,14 +314,16 @@ def _check_reconciliation(doc, findings):
     for i, effect in enumerate(effects):
         if not isinstance(effect, dict):
             continue
-        if not any(entry_covers_effect(f, q, effect) for f, q in entries):
+        if not any(entry_covers_effect(entry, effect) for entry in entries):
             destination = effect.get("destination", "unknown destination")
             findings.append(Finding(
                 "RECON-001", "WARN",
                 f"No reconciliation entry covers effect destination {destination}; the factory trusts its cached belief about that system's state.",
-                "Add a reconciliation entry whose fact rereads this destination's actual state on a cadence.",
+                "Add a reconciliation entry with destination set to this effect's destination, whose query rereads its actual state on a cadence.",
                 f"effects[{i}].destination"))
-    if not any("session" in f.lower() or "session" in q.lower() for f, q in entries):
+    if not any("session" in str(e.get("fact", "")).lower()
+               or "session" in str(e.get("query", "")).lower()
+               for e in entries):
         findings.append(Finding(
             "RECON-002", "WARN",
             "No reconciliation entry resolves the running session for the current claim; a retry cannot start-or-attach, only launch blind.",
@@ -285,14 +335,14 @@ def _check_scheduling(doc, findings):
     scheduling = _get_dict(doc, "scheduling")
     classes = _get_dict(scheduling, "classes") if scheduling else None
     recovery = _get_dict(classes, "recovery") if classes else None
-    if recovery is None or recovery.get("maximum") is None:
+    if recovery is None or not _decided_number(recovery.get("maximum")):
         findings.append(Finding(
             "FLEET-001", "WARN",
-            "No recovery class with a maximum; a retry storm can occupy every slot in the pool.",
-            "Declare scheduling.classes.recovery with a hard maximum.",
+            "No recovery class with a decided numeric maximum; an undecided limit bounds nothing, and a retry storm can occupy every slot in the pool.",
+            "Declare scheduling.classes.recovery with a hard numeric maximum.",
             "scheduling.classes.recovery"))
     has_interactive_reserve = any(
-        "interactive" in name.lower() and spec.get("reserved") is not None
+        "interactive" in name.lower() and _decided_number(spec.get("reserved"))
         for name, spec in (classes or {}).items()
         if isinstance(spec, dict))
     if not has_interactive_reserve:
@@ -315,6 +365,13 @@ def _check_campaigns(doc, findings):
     campaigns = _get_dict(doc, "campaigns")
     if campaigns is None:
         return
+    code_estate = _get_dict(doc, "code_estate")
+    if code_estate is None or not _declared(code_estate.get("canonical_identity")):
+        findings.append(Finding(
+            "CODE-000", "WARN",
+            "Campaigns declared with no decided code_estate; target discovery and completion cannot be checked against current repository state.",
+            "Declare code_estate.canonical_identity (repository@revision) and a topology provider the campaign reruns discovery through.",
+            "code_estate"))
     completion = _get_dict(campaigns, "completion") or {}
     keys = set(completion)
     other = sorted(keys - {"all_current_targets_have_disposition"})

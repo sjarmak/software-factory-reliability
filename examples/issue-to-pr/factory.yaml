@@ -60,7 +60,12 @@ effects:
 reconciliation:
   - fact: pull_request_state
     query: read_current_pull_request
+    destination: code_host
     interval: 5m
+  - fact: notification_delivery_state
+    query: read_notification_receipts
+    destination: messaging
+    interval: 15m
   - fact: running_session
     query: resolve_session_for_current_claim
     interval: 1m

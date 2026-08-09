@@ -1,0 +1,291 @@
+{
+  "authoritative_state": {
+    "claims": {
+      "w-1": {
+        "claim_id": "claim-w-1",
+        "lease": "lease-g7",
+        "session_ids": [
+          "sess-1",
+          "sess-2"
+        ],
+        "work_id": "w-1"
+      }
+    },
+    "effect_ledger": {},
+    "sessions": {
+      "sess-1": {
+        "alive": true,
+        "session_id": "sess-1",
+        "work_id": "w-1",
+        "worker_id": "worker-1"
+      },
+      "sess-2": {
+        "alive": true,
+        "session_id": "sess-2",
+        "work_id": "w-1",
+        "worker_id": "worker-2"
+      }
+    },
+    "work_items": {
+      "w-1": {
+        "generation": 8,
+        "lease": "lease-g8",
+        "status": "completed",
+        "work_id": "w-1"
+      }
+    }
+  },
+  "barrier": "before-publication",
+  "barriers_reached": [
+    "before-publication",
+    "run-complete"
+  ],
+  "campaign_coverage": {
+    "barriers_reached": [
+      "before-publication",
+      "run-complete"
+    ],
+    "faults_injected": [
+      {
+        "at_barrier": "before-publication",
+        "kind": "expire_lease"
+      }
+    ],
+    "mode": "protected",
+    "run_complete": true,
+    "scenario": "stale-writer-completes"
+  },
+  "events": [
+    {
+      "generation": 7,
+      "kind": "work-added",
+      "tick": 1,
+      "work_id": "w-1"
+    },
+    {
+      "kind": "worker-started",
+      "tick": 2,
+      "worker_id": "worker-1"
+    },
+    {
+      "kind": "seeded",
+      "mode": "protected",
+      "scenario": "stale-writer-completes",
+      "tick": 3
+    },
+    {
+      "kind": "run-started",
+      "mode": "protected",
+      "scenario": "stale-writer-completes",
+      "tick": 4
+    },
+    {
+      "attempt": 1,
+      "claim_id": "claim-w-1",
+      "generation": 7,
+      "kind": "work-claimed",
+      "lease": "lease-g7",
+      "tick": 5,
+      "work_id": "w-1"
+    },
+    {
+      "attempt": 1,
+      "kind": "session-launched",
+      "session_id": "sess-1",
+      "tick": 6,
+      "work_id": "w-1",
+      "worker_id": "worker-1"
+    },
+    {
+      "artifact_id": "artifact-g7",
+      "generation": 7,
+      "kind": "artifact-prepared",
+      "observed_generation": null,
+      "session_id": "sess-1",
+      "tick": 7,
+      "work_id": "w-1"
+    },
+    {
+      "barrier": "before-publication",
+      "kind": "barrier-reached",
+      "tick": 8
+    },
+    {
+      "at_barrier": "before-publication",
+      "fault_kind": "expire_lease",
+      "kind": "fault-injected",
+      "tick": 9
+    },
+    {
+      "kind": "lease-expired",
+      "lease": "lease-g7",
+      "tick": 10,
+      "work_id": "w-1"
+    },
+    {
+      "generation": 8,
+      "kind": "generation-advanced",
+      "lease": "lease-g8",
+      "tick": 11,
+      "work_id": "w-1"
+    },
+    {
+      "kind": "worker-started",
+      "tick": 12,
+      "worker_id": "worker-2"
+    },
+    {
+      "attempt": 2,
+      "kind": "session-launched",
+      "session_id": "sess-2",
+      "tick": 13,
+      "work_id": "w-1",
+      "worker_id": "worker-2"
+    },
+    {
+      "artifact_id": "artifact-g8",
+      "generation": 8,
+      "kind": "artifact-prepared",
+      "observed_generation": null,
+      "session_id": "sess-2",
+      "tick": 14,
+      "work_id": "w-1"
+    },
+    {
+      "artifact_id": "artifact-g8",
+      "current_generation": 8,
+      "generation": 8,
+      "kind": "publish-accepted",
+      "session_id": "sess-2",
+      "tick": 15,
+      "work_id": "w-1"
+    },
+    {
+      "attempt": 2,
+      "generation": 8,
+      "kind": "outcome-accepted",
+      "session_id": "sess-2",
+      "tick": 16,
+      "work_id": "w-1"
+    },
+    {
+      "artifact_id": "artifact-g7",
+      "current_generation": 8,
+      "generation": 7,
+      "kind": "publish-rejected-stale",
+      "session_id": "sess-1",
+      "tick": 17,
+      "work_id": "w-1"
+    },
+    {
+      "attempt": 1,
+      "current_generation": 8,
+      "generation": 7,
+      "kind": "completion-rejected-stale",
+      "session_id": "sess-1",
+      "tick": 18,
+      "work_id": "w-1"
+    },
+    {
+      "barrier": "run-complete",
+      "kind": "barrier-reached",
+      "tick": 19
+    }
+  ],
+  "external_effects": {
+    "artifact": {
+      "artifact_id": "artifact-g8",
+      "generation": 8
+    },
+    "mutations": [],
+    "semantics": "dedup"
+  },
+  "fault": {
+    "at_barrier": "before-publication",
+    "kind": "expire_lease"
+  },
+  "identities": {
+    "artifact_ids": [
+      "artifact-g7",
+      "artifact-g8"
+    ],
+    "attempt_ids": [
+      1,
+      2
+    ],
+    "attempt_to_session": {
+      "1": "sess-1",
+      "2": "sess-2"
+    },
+    "claim_ids": [
+      "claim-w-1"
+    ],
+    "effect_ids": [],
+    "generations": [
+      7,
+      8
+    ],
+    "mutation_ids": [],
+    "receipt_ids": [],
+    "session_ids": [
+      "sess-1",
+      "sess-2"
+    ],
+    "work_ids": [
+      "w-1"
+    ],
+    "worker_ids": [
+      "worker-1",
+      "worker-2"
+    ]
+  },
+  "mode": "protected",
+  "oracle": {
+    "description": "After ownership advanced to generation 8 and generation 8 published, the returning generation-7 writer attempted publication and completion; the destination holds the generation-8 artifact and both stale attempts were rejected.",
+    "detail": {
+      "g7_publish_tick": 17,
+      "g8_publish_tick": 15
+    },
+    "expected": {
+      "artifact": "artifact-g8",
+      "stale_completion": "completion-rejected-stale",
+      "stale_publish": "publish-rejected-stale"
+    },
+    "name": "stale-writer-rejected-at-destination",
+    "observed": {
+      "artifact": "artifact-g8",
+      "stale_completion": "completion-rejected-stale",
+      "stale_publish": "publish-rejected-stale"
+    },
+    "verdict": "pass"
+  },
+  "running_executors": {
+    "sessions": [
+      {
+        "session_id": "sess-1",
+        "work_id": "w-1",
+        "worker_id": "worker-1"
+      },
+      {
+        "session_id": "sess-2",
+        "work_id": "w-1",
+        "worker_id": "worker-2"
+      }
+    ],
+    "workers": [
+      {
+        "session_ids": [
+          "sess-1"
+        ],
+        "worker_id": "worker-1"
+      },
+      {
+        "session_ids": [
+          "sess-2"
+        ],
+        "worker_id": "worker-2"
+      }
+    ]
+  },
+  "scenario": "stale-writer-completes"
+}
