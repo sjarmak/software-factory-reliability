@@ -184,8 +184,13 @@ def check_markdown(path, failures, warnings):
     check_single_line_runs(relpath, lines, fence_flags, warnings)
 
 
+# A single-line paragraph longer than this is a full paragraph written on one
+# unwrapped line, not a punchy fragment; the stack check ignores it.
+FRAGMENT_MAX_CHARS = 120
+
+
 def check_single_line_runs(relpath, lines, fence_flags, warnings):
-    """Warn on more than three consecutive single-line prose paragraphs."""
+    """Warn on more than three consecutive short single-line prose paragraphs."""
     blocks = []
     current = None
     for idx, line in enumerate(lines):
@@ -195,8 +200,10 @@ def check_single_line_runs(relpath, lines, fence_flags, warnings):
                 current = None
             continue
         if current is None:
-            current = {"start": idx + 1, "count": 0, "prose": True}
+            current = {"start": idx + 1, "count": 0, "prose": True, "short": True}
         current["count"] += 1
+        if len(line.strip()) > FRAGMENT_MAX_CHARS:
+            current["short"] = False
         if NON_PROSE_LINE_RE.match(line):
             current["prose"] = False
     if current is not None:
@@ -204,8 +211,8 @@ def check_single_line_runs(relpath, lines, fence_flags, warnings):
 
     run_start = None
     run_len = 0
-    for block in blocks + [{"count": 0, "prose": False, "start": 0}]:
-        if block["count"] == 1 and block["prose"]:
+    for block in blocks + [{"count": 0, "prose": False, "start": 0, "short": False}]:
+        if block["count"] == 1 and block["prose"] and block["short"]:
             if run_len == 0:
                 run_start = block["start"]
             run_len += 1
