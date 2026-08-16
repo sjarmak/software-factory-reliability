@@ -53,6 +53,15 @@ AUTH-002 to `patterns/fenced-authority.md`, VERIFY-001 to
 so if your checkout prints different numbers, the catalog changed and this
 page is what needs updating.
 
+Older write-ups quote **6 FAIL, 9 WARN** for this contract. That was correct
+at v0.1 (`4744374`); `03e36b8` added the CODE-000 rule and the tenth warning
+came with it. Until 2026-08-16 the suite pinned the rule multiset but nothing
+compared it to the numbers printed on this page, so this line was updated by
+hand and the published article was not. The catalog and its documentation
+drifted with no mechanism that could notice. `test_quickstart_counts_match_the_unsafe_example`
+now reads the totals line out of this file, which is the whole point the kit
+makes about cached beliefs, applied to the kit.
+
 ## 3. Review a clean contract
 
 ```

@@ -5,6 +5,7 @@ operators do, so exit codes and printed output are covered together.
 """
 
 import json
+import collections
 import subprocess
 import sys
 from pathlib import Path
@@ -309,3 +310,173 @@ def test_published_manifest_requires_artifact_fields(tmp_path):
                 "publication_state": "published"}
     errors = list(validator.iter_errors(manifest))
     assert errors, "published manifest with no artifact fields validated"
+
+
+# --- Rules with no coverage before 2026-08-16 --------------------------------
+#
+# Six rules were defined and exercised by nothing: AUTH-001, EFFECT-000,
+# EFFECT-001, EFFECT-002, IDENT-001 and VERIFY-003. All six worked when probed
+# by hand, which is the point -- nothing here would have noticed if they had
+# stopped. AUTH-001 and IDENT-001 matter most: they are the two rules that
+# separate a factory whose fence compares a monotonic generation from one whose
+# fence compares a string a worker writes about itself, and that distinction is
+# the kit's central claim.
+
+
+def test_ident001_flags_undecided_identity_classes():
+    doc = {"work": {"logical_identity": "unknown",
+                    "attempt_identity": "unknown",
+                    "session_identity": "unknown"}}
+    assert "IDENT-001" in rule_ids(rules_mod.review(doc), "FAIL")
+
+
+def test_ident001_passes_when_the_three_classes_are_distinct():
+    doc = {"work": {"logical_identity": "work_item_id",
+                    "attempt_identity": "attempt_id",
+                    "session_identity": "session_id"}}
+    assert "IDENT-001" not in rule_ids(rules_mod.review(doc), "FAIL")
+
+
+def test_ident001_flags_classes_that_are_not_distinct():
+    """One value reused for three roles cannot tell the roles apart."""
+    doc = {"work": {"logical_identity": "work_item_id",
+                    "attempt_identity": "work_item_id",
+                    "session_identity": "work_item_id"}}
+    assert "IDENT-001" in rule_ids(rules_mod.review(doc), "FAIL")
+
+
+def test_auth001_requires_both_a_generation_and_a_lease():
+    """Either half alone leaves the stale-writer window open."""
+    generation_only = {"work": {"ownership": {"generation": "claim_generation"}}}
+    lease_only = {"work": {"ownership": {"lease_expiry": "lease_expires_at"}}}
+    both = {"work": {"ownership": {"generation": "claim_generation",
+                                   "lease_expiry": "lease_expires_at"}}}
+    assert "AUTH-001" in rule_ids(rules_mod.review(generation_only), "FAIL")
+    assert "AUTH-001" in rule_ids(rules_mod.review(lease_only), "FAIL")
+    assert "AUTH-001" not in rule_ids(rules_mod.review(both), "FAIL")
+
+
+def test_auth001_treats_an_undecided_generation_as_absent():
+    doc = {"work": {"ownership": {"generation": "unknown",
+                                  "lease_expiry": "lease_expires_at"}}}
+    assert "AUTH-001" in rule_ids(rules_mod.review(doc), "FAIL")
+
+
+def test_effect000_flags_a_factory_that_declares_no_effects():
+    assert "EFFECT-000" in rule_ids(rules_mod.review({"work": {}}), "WARN")
+
+
+def test_effect001_and_effect002_flag_undecided_identity_and_retry():
+    doc = {"effects": [{"name": "notify", "destination": "messaging",
+                        "effect_identity": "unknown",
+                        "retry_contract": "unknown"}]}
+    fails = rule_ids(rules_mod.review(doc), "FAIL")
+    assert "EFFECT-001" in fails and "EFFECT-002" in fails
+
+
+def test_effect002_accepts_only_the_decided_retry_contracts():
+    for contract in ("deduplicate", "converge", "reconcile"):
+        doc = {"effects": [{"name": "notify", "destination": "messaging",
+                            "effect_identity": "notification_id",
+                            "retry_contract": contract,
+                            "unknown_state_policy": "reconcile_then_block"}]}
+        assert "EFFECT-002" not in rule_ids(rules_mod.review(doc), "FAIL"), contract
+
+
+def test_verify003_flags_a_missing_verification_block():
+    doc = {"artifacts": {"identity": "commit_sha"}}
+    assert "VERIFY-003" in rule_ids(rules_mod.review(doc), "WARN")
+
+
+# --- Reference-example output is pinned --------------------------------------
+#
+# The kit shipped a published count ("six failures and nine warnings") that went
+# stale the moment CODE-000 was added in 03e36b8: nothing bound the documented
+# numbers to the rules that produce them, so the drift was silent and was found
+# only by someone re-running the example against the article a week later. That
+# is the kit's own thesis turned on the kit -- a claim with no mechanism that
+# could refute it. These tests are that mechanism. When a rule change moves a
+# reference example, this suite fails until QUICKSTART.md and any published
+# write-up are updated to match.
+
+EXPECTED_EXAMPLE_FINDINGS = {
+    "issue-to-pr/factory.yaml": {"FAIL": {}, "WARN": {}},
+    "cross-repo-migration/factory.yaml": {"FAIL": {}, "WARN": {}},
+    "long-running-agent/factory.yaml": {"FAIL": {}, "WARN": {}},
+    "minimal-factory.yaml": {
+        "FAIL": {"AUTH-002": 2, "EFFECT-002": 1, "EFFECT-003": 1, "VERIFY-002": 1},
+        "WARN": {"AUTH-000": 1, "FLEET-001": 1, "FLEET-002": 1, "FLEET-003": 1,
+                 "OBS-001": 1, "RECON-001": 1, "RECON-002": 1, "VERIFY-003": 1},
+    },
+    "unsafe-factory.yaml": {
+        "FAIL": {"AUTH-002": 2, "CAMP-001": 1, "EFFECT-003": 1,
+                 "VERIFY-001": 1, "VERIFY-002": 1},
+        "WARN": {"CODE-000": 1, "EFFECT-004": 1, "FLEET-001": 1, "FLEET-002": 1,
+                 "FLEET-003": 1, "IDENT-002": 1, "OBS-001": 1, "RECON-001": 2,
+                 "RECON-002": 1},
+    },
+}
+
+# Codes alone would not have caught the drift this guard exists for: a rule that
+# starts firing twice where it fired once moves the published total without
+# changing the set. Pin the multiplicity.
+
+
+def _example_path(relative):
+    return EXAMPLES / relative
+
+
+def test_every_example_has_a_pinned_expectation():
+    """A new example must state its expected findings, not appear untested."""
+    on_disk = {str(p.relative_to(EXAMPLES)) for p in EXAMPLES.rglob("factory.yaml")}
+    on_disk |= {p.name for p in EXAMPLES.glob("*.yaml")}
+    assert on_disk == set(EXPECTED_EXAMPLE_FINDINGS), (
+        "examples on disk and pinned expectations disagree; "
+        "add the new example to EXPECTED_EXAMPLE_FINDINGS")
+
+
+def test_reference_example_findings_are_exactly_as_documented(tmp_path):
+    for relative, expected in EXPECTED_EXAMPLE_FINDINGS.items():
+        result = run_cli("review", str(_example_path(relative)),
+                         "--out", str(tmp_path / relative.replace("/", "_")))
+        for severity, counts in expected.items():
+            actual = collections.Counter(
+                line.split()[1] for line in finding_lines(result.stdout, severity))
+            assert dict(actual) == counts, (
+                f"{relative}: {severity} findings drifted.\n"
+                f"  expected {sorted(counts.items())}\n"
+                f"  actual   {sorted(actual.items())}\n"
+                "Update EXPECTED_EXAMPLE_FINDINGS *and* every document that "
+                "quotes these counts (QUICKSTART.md, published write-ups).")
+        total = sum(sum(c.values()) for c in expected.values())
+        assert f"{sum(expected['FAIL'].values())} FAIL, " \
+               f"{sum(expected['WARN'].values())} WARN" in result.stdout, \
+            f"{relative}: summary line disagrees with the per-rule pins ({total} pinned)"
+
+
+def test_quickstart_counts_match_the_unsafe_example(tmp_path):
+    """QUICKSTART prints a literal count; keep it honest against the rules."""
+    result = run_cli("review", str(UNSAFE), "--out", str(tmp_path))
+    summary = [line for line in result.stdout.splitlines()
+               if line.endswith("WARN") and "FAIL," in line]
+    assert len(summary) == 1, result.stdout
+    assert summary[0] in (ROOT / "QUICKSTART.md").read_text(), (
+        f"QUICKSTART.md does not contain the current summary line {summary[0]!r}")
+
+
+def test_recon001_reports_once_per_destination_not_once_per_effect():
+    """Three effects at one uncovered destination are one coverage problem."""
+    doc = {"effects": [
+        {"name": "push", "destination": "code_host"},
+        {"name": "open_pr", "destination": "code_host"},
+        {"name": "merge_pr", "destination": "code_host"},
+        {"name": "notify", "destination": "messaging"},
+    ]}
+    recon = [f for f in rules_mod.review(doc) if f.rule == "RECON-001"]
+    assert len(recon) == 2, [f.message for f in recon]
+    destinations = sorted(f.message.split("destination ")[1].split(";")[0]
+                          for f in recon)
+    assert destinations == ["code_host", "messaging"]
+    code_host = next(f for f in recon if "code_host" in f.message)
+    for name in ("push", "open_pr", "merge_pr"):
+        assert name in code_host.message, "the message should name every affected effect"

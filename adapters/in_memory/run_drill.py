@@ -25,6 +25,15 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+# Running this file as a script (`python3 adapters/in_memory/run_drill.py ...`)
+# puts its own directory on sys.path rather than the repository root, so the
+# absolute import below raised ModuleNotFoundError: No module named 'adapters'.
+# The documented form is `python3 -m adapters.in_memory.run_drill`, but a drill
+# runner that dies on the obvious invocation teaches the wrong lesson about
+# fault tolerance. Put the repository root on the path when it is missing.
+if __package__ in (None, ""):  # pragma: no cover - script-invocation path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
 from adapters.in_memory.adapter import EFFECT_ID, WORK_ID, InMemoryAdapter
 
 

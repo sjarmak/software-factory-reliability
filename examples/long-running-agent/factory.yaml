@@ -80,6 +80,14 @@ reconciliation:
   - fact: workspace_state
     query: read_workspace_head
     interval: 5m
+  # A progress update is an external effect like any other, and a long-running
+  # agent emits many of them. Without this entry the factory trusts its own
+  # send-side belief about what the channel received, which is the state that
+  # goes stale first when a long session is retried or reattached.
+  - fact: progress_update_delivery
+    query: read_progress_update_receipts
+    destination: messaging
+    interval: 5m
 
 scheduling:
   capacity: { total: 40 }

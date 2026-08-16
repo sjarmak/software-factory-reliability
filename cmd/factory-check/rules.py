@@ -311,16 +311,29 @@ def _check_artifacts(doc, findings):
 def _check_reconciliation(doc, findings):
     entries = _recon_entries(doc)
     effects = doc.get("effects") if isinstance(doc.get("effects"), list) else []
+    # RECON-001 is a statement about a DESTINATION, not about an effect: the
+    # remediation is one reconciliation entry that covers the destination, no
+    # matter how many effects target it. Reporting it per-effect emitted the
+    # identical message and hint once per effect, so a factory with five effects
+    # across two uncovered destinations raised five warnings for two problems and
+    # its warning count tracked effect multiplicity rather than missing coverage.
+    # Report once per uncovered destination, naming every effect that relies on it.
+    uncovered = {}
     for i, effect in enumerate(effects):
         if not isinstance(effect, dict):
             continue
-        if not any(entry_covers_effect(entry, effect) for entry in entries):
-            destination = effect.get("destination", "unknown destination")
-            findings.append(Finding(
-                "RECON-001", "WARN",
-                f"No reconciliation entry covers effect destination {destination}; the factory trusts its cached belief about that system's state.",
-                "Add a reconciliation entry with destination set to this effect's destination, whose query rereads its actual state on a cadence.",
-                f"effects[{i}].destination"))
+        if any(entry_covers_effect(entry, effect) for entry in entries):
+            continue
+        destination = effect.get("destination", "unknown destination")
+        uncovered.setdefault(destination, []).append((i, effect.get("name")))
+    for destination, affected in uncovered.items():
+        names = ", ".join(str(name) for _, name in affected if name)
+        via = f" Effects relying on it: {names}." if names else ""
+        findings.append(Finding(
+            "RECON-001", "WARN",
+            f"No reconciliation entry covers effect destination {destination}; the factory trusts its cached belief about that system's state.{via}",
+            "Add a reconciliation entry with destination set to this effect's destination, whose query rereads its actual state on a cadence.",
+            f"effects[{affected[0][0]}].destination"))
     if not any("session" in str(e.get("fact", "")).lower()
                or "session" in str(e.get("query", "")).lower()
                for e in entries):
