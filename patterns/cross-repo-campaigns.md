@@ -54,6 +54,29 @@ happened.
 A campaign join built by summing child status fields inherits all three
 failures at once.
 
+The discovery pass itself can also be narrower than the population, and that
+failure is quieter than any of the above because nothing reports it. One
+system runs a scheduled check for externally submitted CI runs held awaiting
+approval. Two repositories receive those submissions. The check reads its
+target repository from an environment variable with a single-repository
+default, exposes no flag to override it, and is scheduled with no environment
+block, so the default is what runs. Its own allowlist already names both
+repositories, so the second one is permitted and never selected. A sibling
+automerge job in the same directory did get a second scheduled instance for
+the second repository; this one did not.
+
+The watched repository accumulated eleven blocked contributor pull requests
+over four days, which was noticed because the check was also crashing and its
+failures were visible. The unwatched repository accumulated 174 held runs
+over three weeks, ninety of them at the current head of an open pull request,
+across 44 outside contributors. No clock ever started there, because a
+discovery pass that is pointed at one of two populations returns a complete
+and correct answer about the population it was pointed at. The narrower
+failure was found in four days; the wider one was four times larger and had
+been running for three weeks when someone happened to query the second
+repository by hand.
+(gascity2026:bin/fork-pr-approval-gate, orders/fork-pr-approval-gate.toml)
+
 ## Invariant
 
 A campaign is complete only when a fresh discovery pass over current
@@ -193,6 +216,12 @@ planned base revision is invalidated mid-flight.
   ch12 portable claim).
 - Completion evidence must originate at the effect boundary, not the agent's
   self-report: agent-era (book ch08).
+- A discovery pass pinned to one of two eligible repositories by an
+  unoverridden default: 174 held runs over three weeks in the unselected
+  repository, 90 at a current pull-request head across 44 outside
+  contributors, against 11 over four days in the selected one: local
+  observation (gascity2026:bin/fork-pr-approval-gate,
+  orders/fork-pr-approval-gate.toml).
 - The campaign as a fold over dispositions with discovery rerun at
   completion: inference (our synthesis; the components above are observed,
   the composition is not).
@@ -222,6 +251,8 @@ holding the fact), this time at the join.
 - gascity2026:docs/design/city-reliability-surface.md
 - gascity2026:docs/design/software-factory-philosophy.md
 - temporallab2026:docs/guarantees.md
+- gascity2026:bin/fork-pr-approval-gate,
+  gascity2026:orders/fork-pr-approval-gate.toml
 - Book manuscript ch08 and ch12,
   ercabook2026:chapters/
 - Worked coverage example:
