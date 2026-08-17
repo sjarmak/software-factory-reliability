@@ -49,6 +49,20 @@ resource's state accurately every time. The property that fails here is not
 reachability of the check's branches but reachability of the repair, which is
 a different question asked of a different piece of code.
 
+One discriminator is worth carrying, because a neighbouring shape produces the
+same long run of identical failures and wants a different fix. This page is
+about a guard whose condition is the repair's own postcondition, so the system
+holds the cure behind the symptom and the lockout is self-inflicted. The other
+shape is a guard whose condition the repair could never clear at all: a
+wrapper's copy of a downstream tool's interface that has drifted from the tool,
+refusing a command the tool would accept. Both refuse forever and both look
+like one persistent external problem in the log. Ask whether running the repair
+would satisfy the guard. If it would, the order of two lines is the bug. If it
+could not, the guard is asserting something it no longer knows, and the fix is
+to stop keeping a second copy of somebody else's contract, or to test the copy
+against the original. The reconciliation page carries a measured instance of
+the second kind.
+
 ## Observed failure
 
 A scheduled instrument in a production installation examined worktree

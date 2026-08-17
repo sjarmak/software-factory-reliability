@@ -75,6 +75,40 @@ notice.
 (gascity2026:bin/orphaned-molecule-reaper,
 orders/orphaned-molecule-reaper.toml.disabled)
 
+A loop can satisfy every rule on this page and still never converge, because
+convergence also depends on the write at the end of it being accepted. The
+completion reconciler in the authoring installation is level-triggered,
+re-derives from the store each tick, holds nothing between ticks, and repairs
+idempotently. From 2026-08-10 its repair write was refused, with the store
+naming the remedy in the refusal: the work item was held by a live claim, and
+the error text said to pass a force flag if that claim was abandoned. A commit
+on 2026-08-12 titled "recover abandoned completion claims" added the flag, two
+lines, exactly as instructed. Seventeen minutes before that commit the last
+refusal of the old kind was logged. At the next scheduled tick the refusal
+changed shape and has not stopped since. The command wrapper the reconciler
+calls carries a fail-closed argument guard that aborts on any flag it does not
+recognise rather than risk resolving an ambiguous identifier to the wrong
+record. The guard is right to do that, and its table of recognised flags omits
+this flag for the update subcommand while listing it for four sibling
+subcommands, against a tool whose own help documents it. The store named the
+flag, the caller passed the flag, and the caller's own wrapper rejected it as
+unrecognised. Four days on, the count is 671 refusals across six work items,
+every one still stuck, the fix that was supposed to free them having never once
+executed, and no signal anywhere above a line in a log file.
+
+The loop already held the evidence that separates a repair which has not
+converged yet from one that never will. In the same file, 68 repairs succeeded:
+63 on the first attempt, 5 on the second, and none in the file's history on any
+later attempt. Items sitting at attempt 220 are not being retried, they are
+being refused, and a loop that never compares an attempt count against its own
+distribution of successes cannot tell those apart. At-least-once repair is safe
+to run forever, which is precisely why permanent refusal hides inside it: from
+outside, a loop failing every tick and a loop with nothing to do produce the
+same silence. Only the guard's own honesty made this recoverable at all, since
+it refused loudly into a log rather than dropping the write.
+(gascity2026:bin/completion-reconciler,
+gascity2026:internal/bdflags/bdflags.go)
+
 Lookup failure treated as absence: gc-28jm's duplicate workflow roots were
 minted after a dedup query returned empty because it ran against a different
 store from the one holding the earlier root.
@@ -173,6 +207,13 @@ cycle and a bash poller) both exhibited on 2026-07-16.
   [explicit-unknown-state](explicit-unknown-state.md).
 - Bounded backlog. Reconciliation converges state, given capacity; it does
   not create the capacity.
+- Convergence at all, when the repair write is refused at its destination. A
+  level-triggered loop retries a permanent refusal on exactly the cadence it
+  retries a transient one, indefinitely, and the two are indistinguishable
+  from outside. Distinguishing them needs no new instrument in the common
+  case: a loop that records attempt counts already knows the distribution of
+  attempt counts on which its repairs succeed, and an item far outside that
+  distribution is a refusal wearing a retry's clothes.
 
 ## Failure drill
 
@@ -214,6 +255,15 @@ of deriving an absence repair.
   reaper's benefit while that reaper is disarmed in the authoring
   installation; the claim about its value stands on the pre-disarm
   measurement, not on current practice.
+- A reconciler correct by every rule on this page that has not converged
+  since 2026-08-13: 671 refusals across six work items, the refusal introduced
+  by the two-line commit intended to clear the previous refusal, measured
+  against a success distribution of 63 first-attempt and 5 second-attempt
+  repairs and none later anywhere in the log. Unfixed in the authoring
+  installation at the time of writing; the fix is a table row in a wrapper
+  owned by another repository. Local observation
+  (gascity2026:bin/completion-reconciler,
+  gascity2026:internal/bdflags/bdflags.go).
 - Memory-holding watcher pathology in one component: 60m22s
   review-to-dispatch latency on a 15-minute poll, roughly 72 API calls per
   hour at steady state to learn nothing, 174 cache files for 8 open PRs with
@@ -272,6 +322,8 @@ of deriving an absence repair.
 - gascity2026:docs/incidents/2026-08-01-status-path-latency-recurrence.md
 - gascity2026:bin/orphaned-molecule-reaper,
   gascity2026:orders/orphaned-molecule-reaper.toml.disabled
+- gascity2026:bin/completion-reconciler,
+  gascity2026:internal/bdflags/bdflags.go
 - Related patterns: [effect-identity](effect-identity.md),
   [explicit-unknown-state](explicit-unknown-state.md),
   [verify-before-publish](verify-before-publish.md)
