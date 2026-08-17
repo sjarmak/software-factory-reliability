@@ -4,7 +4,7 @@ behavior:
         archive_level: 0
 listener:
     host: 127.0.0.1
-    port: 40381
+    port: 33351
 cfg_dir: /home/ds/projects/software-factory-reliability/.beads/dolt/.doltcfg
 user_session_vars: []
 jwks: []

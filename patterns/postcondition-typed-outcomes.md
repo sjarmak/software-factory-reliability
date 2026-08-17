@@ -23,6 +23,19 @@ or reports a dispatch it believes succeeded. An agent is a fast and literal
 consumer of exit statuses, which makes it the caller most exposed to this: it
 does not carry the operator's habit of reading a success line as provisional.
 
+The mirror image of that costs as much and is easier to miss, because it
+happens after the boundary got it right. A command surface can carry a
+considered vocabulary and lose it in the runtime that invokes it: the
+scheduler, the runner, the shell wrapper, the pipeline step that reads the
+process back. Those layers are usually written once, against the assumption
+that a process either worked or did not, and they are rarely revisited when a
+tool underneath them grows a richer contract. The result is a system where the
+instrument is honest, the caller would branch correctly if it could, and the
+value between them is truncated in transit, so a finding and a crash arrive at
+the operator in the same shape. Nobody has to make a mistake for this to
+happen, which is why it survives review: the boundary passes its own tests, the
+runner passes its own tests, and the composition is what fails.
+
 Three pages in this kit border this one and none of them cover it.
 [explicit-unknown-state](explicit-unknown-state.md) models three outcome states
 in the durable store during recovery, after a process died; this page is about
@@ -84,6 +97,42 @@ the exit status
 (gascity2026:docs/adr/0021-idempotent-convergence-and-fenced-publication.md).
 For that boundary the exit status is not a weak postcondition claim, it is not a
 postcondition claim at all, and the only correct use of it is to ignore it.
+
+The truncation-in-transit failure was measured across a whole fleet of
+instruments on 2026-08-17. A maintenance campaign four days earlier had
+upgraded eleven scheduled checks from a boolean exit to a three-valued
+contract: zero for a clean reading, one for a reading that found actionable
+work, two for a reading the check could not take. The contract is written into
+the scripts themselves, one of them documenting the tri-state in its own module
+docstring. The scheduler that runs them maps any non-zero exit to a single
+execution-failed outcome and emits a failure event carrying the numeric status
+as a message string, and its order configuration carries no field for an
+expected or actionable exit code. The richer vocabulary therefore reached
+exactly one surface, an event log nobody reads, and everywhere else "I checked
+and found work" renders identically to "I crashed"
+(gascity2026:internal/orders/order_dispatch.go, gascity2026:internal/orders/order.go).
+
+The cost is a board that cannot be read. Across those eleven checks, 1,313 runs
+were recorded as failures in the three days after the campaign landed. Seven
+were examined in detail and six of the seven were instruments reporting
+correctly. One publishes a report, mails its finding, and exits one because the
+finding is non-empty; it has never exited zero and it cannot, because a second
+cell in the same report is permanently unavailable pending a deployment step
+nobody has run, in 47 of 47 recorded runs. Another refuses to report green
+without an operator authority file, exactly as its own configuration specifies
+it must, and that correct refusal is recorded as a crash on every fire. A third
+did its whole job on each failing run, balanced capacity, posted a real alert
+and persisted its dedupe state, then returned two because two of the five
+accounts it is required to observe can never be observed, one of them retired
+by decision a month earlier. The seventh was genuinely broken, and it had been
+sitting in the same colour as the other six for four days.
+
+Where the fix has to go is what separates this from the boundary-side failure.
+Eleven scripts could each be edited to surrender their vocabulary and return
+zero for anything short of a crash, which is the change a red board pressures
+someone into making, and it would remove precisely the distinction the campaign
+was run to create. The single change that preserves it is one field on the
+runner.
 
 ## Invariant
 
@@ -230,6 +279,18 @@ statement wrapper that exits zero on a refused statement; there the enforcement
 has to move to the caller, which must read the table, and the boundary's
 contribution is to document that its own status means nothing.
 
+Enforcement has a second site, and it is the one the fleet measurement above
+found empty: every runtime between the boundary and the operator has to be
+audited for the same truncation. A scheduler, a wrapper, a retry loop and a
+pipeline step are all callers, and each of them is entitled to collapse a
+vocabulary it was never told about. The mechanical check is the mirror of the
+one above: for each consuming layer, name the values it can distinguish, then
+compare that set against what the boundaries beneath it emit. Where the
+consumer's set is smaller, the difference is being discarded, and the place to
+widen it is the consumer, not the boundaries. Widening a consuming layer is one
+change; narrowing every boundary beneath it to fit is as many changes as there
+are boundaries, and it destroys the information rather than delivering it.
+
 The enforcement fails to be available in one case, and that case has an answer.
 When the destination cannot be read back (no query keyed by the request
 identity, a read path that is down, an answer the boundary cannot trust), the
@@ -267,8 +328,13 @@ ignorance.
   wrong store resolves the classification incorrectly with full confidence, and
   the same discipline the recovery read needs applies here
   ([reconciliation](reconciliation.md)).
-- No help for a caller that ignores the type. A boundary can return six
-  distinguishable outcomes to a caller that branches on exit status alone.
+- No help for a caller that ignores the type, and the caller is often a runtime
+  nobody thought of as one. A boundary can return six distinguishable outcomes
+  to a scheduler, wrapper, or pipeline step that branches on zero versus
+  non-zero, and the vocabulary dies there with the boundary entirely blameless.
+  The fleet measurement above is this bullet with a number on it: eleven
+  instruments, 1,313 runs recorded as failures in three days, six of the seven
+  examined reporting correctly.
 
 ## Failure drill
 
@@ -335,6 +401,21 @@ recorded. Evidence for both arms lands in `out/evidence/`.
   statement, verified 2026-08-09 by reading the table rather than the exit
   status: local observation
   (gascity2026:docs/adr/0021-idempotent-convergence-and-fenced-publication.md).
+- Eleven scheduled checks upgraded to a three-valued exit contract, run by a
+  scheduler that maps every non-zero status to one execution-failed outcome and
+  offers no per-order allowlist, so 1,313 runs across three days were recorded
+  as failures with no way to separate a finding from a crash: local observation
+  (gascity2026:internal/orders/order_dispatch.go,
+  gascity2026:internal/orders/order.go).
+- Of seven of those checks examined in detail, six were reporting correctly and
+  one was genuinely broken: a report that exits non-zero because its finding is
+  non-empty and has never exited zero, its second cell unavailable in 47 of 47
+  runs pending an unrun deployment step; a readout correctly refusing to report
+  green without an operator authority file, as its own configuration requires; a
+  quota alarm that posted a real alert and persisted dedupe state on each
+  failing run, then returned two because two of five required accounts are
+  permanently unobservable, one retired by decision a month earlier: local
+  observation (same sources).
 - Idempotent receivers and request identifiers as the precondition for a safe
   retry: foundational (Joshi 2023, Patterns of Distributed Systems).
 - Fault classification into rejected-before-mutation, failed-after-mutation, and
@@ -357,6 +438,16 @@ verification gate. That is the strongest available evidence that the pattern
 names something real, and it is also the reason nothing here may be read as a
 description of a working system. The six states are a proposal recorded in that
 installation's report, and the only place they execute is the simulator.
+
+Partial adoption exists and is the sharper warning. Eleven of that
+installation's scheduled checks do return a considered vocabulary, three states
+rather than six, deliberately introduced by a campaign whose whole purpose was
+to make an unreadable board readable. It made the board less readable, because
+the consuming runtime was not part of the change. That is the cheapest
+available lesson on this page and the one most likely to be repeated: adopting
+a typed outcome at the boundary, without widening every consumer between the
+boundary and the human, converts working instruments into apparent failures and
+creates pressure to reverse the improvement.
 
 The pattern makes the boundary slower and more expensive by construction. Every
 command that would have returned after its outbound call now performs a readback
@@ -385,6 +476,8 @@ obligation rather than removing it.
 - gascity2026:CLAUDE.md
 - gascity2026:docs/conventions/bead-dispatch.md
 - gascity2026:docs/adr/0021-idempotent-convergence-and-fenced-publication.md
+- gascity2026:internal/orders/order_dispatch.go
+- gascity2026:internal/orders/order.go
 - Joshi 2023, Patterns of Distributed Systems (idempotent receiver, request identifiers)
 - Waldo, Wyant, Wollrath, Kendall 1994, A Note on Distributed Computing
 - Kleppmann 2017, Designing Data-Intensive Applications, ch. 8
