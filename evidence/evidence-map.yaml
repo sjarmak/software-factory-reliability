@@ -501,3 +501,102 @@ patterns:
         simulator.
       basis: inference
       source: "this kit's lag-bounded-reads pattern and the source-advances-view-answers-anyway drill"
+  falsifiable-checks:
+    - claim: >-
+        A test suite's value is measured by the faults it detects rather
+        than by the code it executes, and the way to establish that a test
+        detects a fault is to introduce the fault and observe the failure.
+      basis: foundational
+      source: "DeMillo, Lipton, Sayward 1978, Hints on Test Data Selection; Papadakis et al. 2019, Mutation Testing Advances: An Analysis and Survey"
+    - claim: >-
+        A claim earns standing by being falsifiable, so the admission
+        question for a check is which observation would make it report the
+        other verdict.
+      basis: foundational
+      source: "Popper 1959, The Logic of Scientific Discovery"
+    - claim: >-
+        A reap protocol keyed one of four preconditions on a metadata field
+        no writer sets. The field was present on 0 of 1,298 work items in
+        the store the guard queried, so that leg passed for everything that
+        had ever existed, and the protocol was documented as four
+        independent confirmations while three were load-bearing.
+      basis: local-observation
+      source: gascity2026:docs/conventions/city-learnings.md
+    - claim: >-
+        Re-measured across all 23 bead databases rather than one, the same
+        key was present on 0 of 16,646 work items, recorded by the audit as
+        confirmed and worse than first reported.
+      basis: local-observation
+      source: "gascity2026:.gc-reports/factory-contract-audit-2026-08-16/audit-one-work-item.md"
+    - claim: >-
+        A review gate read a passing verdict from a metadata key the
+        closing code itself wrote, and the shell rail beside it validated
+        the key's name and never its value, so the gate could not refuse a
+        close. 216 closes across 10 databases ran under it between
+        2026-08-03 and 2026-08-11 before both halves were fixed.
+      basis: local-observation
+      source: "gascity2026:.gc-reports/factory-contract-audit-2026-08-16/README.md"
+    - claim: >-
+        A close-gate reaper recorded 32,618 detections against zero repairs
+        over 11 days, because a timeout was killing every repair run before
+        it could act. Its lifetime counters record 209 and 73 repairs of
+        its two kinds, so the check had converged before it stopped.
+      basis: local-observation
+      source: "gascity2026:docs/asks-and-outcomes.md; gascity2026:.gc-reports/factory-contract-audit-2026-08-16/factory.yaml"
+    - claim: >-
+        Ten instruments in one installation have a single outcome word in
+        their entire recorded vocabulary, one of them having written
+        exactly one line in its lifetime, so nobody knows what it reports
+        when there is nothing to report.
+      basis: local-observation
+      source: gascity2026:docs/conventions/instrument-contract.md
+    - claim: >-
+        Every instrument audited against that installation's own instrument
+        contract failed its make-it-fail clause before being touched, four
+        out of four: one had no test, and three had suites that had only
+        ever been observed passing, including the watchdog whose job is
+        noticing silence.
+      basis: local-observation
+      source: gascity2026:docs/conventions/instrument-contract.md
+    - claim: >-
+        Reading a test is not equivalent to running it against a mutation.
+        A regression test written for a specific fix passed with that fix
+        reverted, because one assertion read files the test had planted
+        itself and another passed on an accident of which component wrote a
+        shared file last.
+      basis: local-observation
+      source: gascity2026:docs/conventions/instrument-contract.md
+    - claim: >-
+        Removal is a legitimate outcome of the demonstration. A destination
+        hash re-read standing behind three earlier guards was deleted after
+        replacing it with a constant-false condition left the full test
+        suite green, with the reasoning recorded at the site.
+      basis: local-observation
+      source: gascity2026:bin/asks-vault-mirror
+    - claim: >-
+        The complementary case is a guard whose removal is felt at once.
+        Replacing the refusal to write to a destination path that exists
+        and is not a regular file with a constant-false condition took that
+        suite from 16 passed and 0 failed to 14 passed and 2 failed, and
+        the same treatment of a check comparing an index timestamp before
+        and after a refresh took its suite from 10 and 0 to 9 and 1. Each
+        failure named the case it belonged to.
+      basis: local-observation
+      source: "gascity2026:bin/asks-vault-mirror.test; gascity2026:bin/cass-index-refresh.test"
+    - claim: >-
+        Every metadata key a check reads must have a writer elsewhere in
+        the tree that is not the check. Asking that once turned up three
+        keys with no consumer or no producer in a single afternoon, one of
+        which had left 25 contributor pull requests under a standing block
+        at a 42 day median.
+      basis: local-observation
+      source: gascity2026:docs/conventions/city-learnings.md
+    - claim: >-
+        Admitting a check only on a demonstrated mutation recorded beside
+        it, with the verdict computed from an input neither the check nor
+        the component under check produced, and detections counted
+        separately from repairs so a constant verdict is visible in either
+        direction. The failure shapes are observed; this composition
+        executes only against the in-memory simulator.
+      basis: inference
+      source: "this kit's falsifiable-checks pattern and the state-changes-check-does-not drill"

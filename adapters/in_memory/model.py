@@ -22,6 +22,11 @@ delivery layer. Its two query paths (query_view_lag_checked and
 query_view_index_only) are the difference between an answer bounded by the
 view's distance from the source and an answer bounded by nothing.
 
+A sixth is the factory's own guards. A check reads something and returns a
+verdict, and the two evaluation paths (check_by_destination_readback and
+check_by_self_written_verdict) are the difference between an input the
+check cannot influence and an input the check produced a moment earlier.
+
 Basis note: the layer split mirrors the guarantee split observed in the
 Temporal experiment series (local observation,
 temporallab2026:docs/guarantees.md): completion cardinality at the
@@ -129,6 +134,24 @@ class Request:
     terminal: dict | None = None
 
 
+@dataclass
+class Check:
+    """One guard the factory runs against its own state.
+
+    claim names the property the guard asserts and effect_id names the
+    destination record that property is about, so a reader can tell which
+    state change is supposed to flip the verdict. verdicts is the ordered
+    list of evaluations, kept because a single verdict says nothing: the
+    evidence that a guard discriminates is two different verdicts across a
+    transition that crosses its claim.
+    """
+
+    check_id: str
+    claim: str
+    effect_id: str
+    verdicts: list[str] = field(default_factory=list)
+
+
 # Outcomes that describe a settled request. The other three
 # (requested-and-queued, partially-applied,
 # unknown-because-observation-failed) leave work owed to the caller.
@@ -225,6 +248,11 @@ class Factory:
         self.effect_ledger: dict[str, dict] = {}
         self.requests: dict[str, Request] = {}
         self.views: dict[str, DerivedView] = {}
+        self.checks: dict[str, Check] = {}
+        # Metadata the checks themselves write. Kept apart from the ledger
+        # and the destination because its provenance is what the drill is
+        # about: a value in here was produced by the thing being checked.
+        self.check_metadata: dict[str, str] = {}
         self.attempt_sessions: dict[int, str] = {}
         self.bus = EventBus()
         self.destination = Destination(destination_semantics)
@@ -236,6 +264,7 @@ class Factory:
         self.artifact_ids: list[str] = []
         self.request_ids: list[str] = []
         self.view_ids: list[str] = []
+        self.check_ids: list[str] = []
         self.generations_seen: list[int] = []
 
     def log(self, event_kind: str, /, **detail) -> None:
@@ -562,6 +591,69 @@ class Factory:
         self.log("view-health-reported", **record)
         return record
 
+    # checks
+
+    def add_check(self, check_id: str, claim: str, effect_id: str) -> Check:
+        check = Check(check_id=check_id, claim=claim, effect_id=effect_id)
+        self.checks[check_id] = check
+        self._note(self.check_ids, check_id)
+        self.log("check-registered", check_id=check_id, claim=claim,
+                 effect_id=effect_id)
+        return check
+
+    def write_check_key(self, check_id: str, key: str, value: str) -> None:
+        """A check records something about its own run.
+
+        Writing this is unremarkable on its own. It becomes the defect when
+        the same check later reads the key back as its evidence, which is
+        why the write is logged with the check that made it: the log is
+        what lets an oracle tell a check's input apart from its output.
+        """
+        self.check_metadata[key] = value
+        self.log("check-key-written", check_id=check_id, key=key, value=value)
+
+    def _record_verdict(self, check: Check, verdict: str, basis: str,
+                        read_key: str, observed) -> dict:
+        check.verdicts.append(verdict)
+        record = {"check_id": check.check_id, "verdict": verdict,
+                  "basis": basis, "read_key": read_key, "observed": observed,
+                  "claim": check.claim}
+        self.log("check-evaluated", **record)
+        return record
+
+    def check_by_destination_readback(self, check_id: str) -> dict:
+        """Evaluate the check against the destination.
+
+        The input is the destination's own mutation list, which no check
+        writes, so the verdict follows the state rather than the factory's
+        belief about the state. The same evaluation run before and after
+        the record appears returns different verdicts, which is the
+        property that makes it a check.
+        """
+        check = self.checks[check_id]
+        present = any(m.effect_id == check.effect_id
+                      for m in self.destination.mutations)
+        return self._record_verdict(
+            check, "pass" if present else "fail", "destination-readback",
+            f"destination/{check.effect_id}", present)
+
+    def check_by_self_written_verdict(self, check_id: str) -> dict:
+        """Evaluate the check against a key the check itself wrote.
+
+        Each evaluation stamps its own metadata key and then reads that key
+        back as the evidence for its verdict. Nothing here touches the
+        destination, so the branch that would return fail is unreachable
+        and the verdict is pass in every state, including the states the
+        check exists to catch.
+        """
+        check = self.checks[check_id]
+        key = f"{check.check_id}/verdict"
+        self.write_check_key(check_id, key, "pass")
+        observed = self.check_metadata.get(key)
+        return self._record_verdict(
+            check, "pass" if observed == "pass" else "fail",
+            "self-written-metadata-key", key, observed)
+
     # destination operations
 
     def apply_effect(self, work_id: str, session_id: str, effect_id: str,
@@ -724,6 +816,12 @@ class Factory:
                       "source_position": self.source_position()}
                 for vid, v in self.views.items()
             },
+            "checks": {
+                cid: {"check_id": c.check_id, "claim": c.claim,
+                      "effect_id": c.effect_id, "verdicts": list(c.verdicts)}
+                for cid, c in self.checks.items()
+            },
+            "check_metadata": dict(self.check_metadata),
         }
 
     def effects_snapshot(self) -> dict:
@@ -763,6 +861,7 @@ class Factory:
             "artifact_ids": list(self.artifact_ids),
             "request_ids": list(self.request_ids),
             "view_ids": list(self.view_ids),
+            "check_ids": list(self.check_ids),
             "mutation_ids": [m.mutation_id for m in self.destination.mutations],
             "receipt_ids": [m.receipt for m in self.destination.mutations],
             "attempt_to_session": {

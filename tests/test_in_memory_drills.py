@@ -1,8 +1,8 @@
-"""Pytest coverage for the seven in-memory drills in both modes.
+"""Pytest coverage for the eight in-memory drills in both modes.
 
 Each drill-mode pair is run through the callable API (run_drill) for
 speed; exit codes and evidence-file invariants are asserted for all
-fourteen combinations, plus determinism and protocol-validation checks.
+sixteen combinations, plus determinism and protocol-validation checks.
 """
 
 from __future__ import annotations
@@ -33,6 +33,7 @@ EXPECTED_BARRIER = {
     "child-completes-after-join": "before-join",
     "request-accepted-effect-never-applied": "request-accepted",
     "source-advances-view-answers-anyway": "view-current",
+    "state-changes-check-does-not": "check-registered",
 }
 # Full fault records: a targeted fault carries the target it was aimed at, so
 # the evidence names which lease expired rather than leaving it to the log.
@@ -44,6 +45,7 @@ EXPECTED_FAULT = {
     "child-completes-after-join": {"kind": "expire_lease", "target": "c-3"},
     "request-accepted-effect-never-applied": {"kind": "drop_event"},
     "source-advances-view-answers-anyway": {"kind": "drop_event"},
+    "state-changes-check-does-not": {"kind": "drop_event"},
 }
 # Work items each scenario seeds, in identity_snapshot order (sorted).
 EXPECTED_WORK_IDS = {
@@ -54,6 +56,7 @@ EXPECTED_WORK_IDS = {
     "child-completes-after-join": ["c-1", "c-2", "c-3", "w-1"],
     "request-accepted-effect-never-applied": ["w-1"],
     "source-advances-view-answers-anyway": ["w-1"],
+    "state-changes-check-does-not": ["w-1"],
 }
 COMBOS = [(drill, mode) for drill in sorted(DRILLS) for mode in MODES]
 
@@ -547,7 +550,8 @@ def test_oracles_error_on_vacuous_evidence():
     from adapters.in_memory.run_drill import (
         _oracle_worker_dies, _oracle_stale_writer, _oracle_effect_ack,
         _oracle_event_lost, _oracle_child_after_join,
-        _oracle_request_never_applied, _oracle_stale_view)
+        _oracle_request_never_applied, _oracle_stale_view,
+        _oracle_check_falsifiability)
     vacuous = {
         "events": [],
         "authoritative_state": {
@@ -561,7 +565,7 @@ def test_oracles_error_on_vacuous_evidence():
     for oracle in (_oracle_worker_dies, _oracle_stale_writer,
                    _oracle_effect_ack, _oracle_event_lost,
                    _oracle_child_after_join, _oracle_request_never_applied,
-                   _oracle_stale_view):
+                   _oracle_stale_view, _oracle_check_falsifiability):
         verdict = oracle(vacuous)["verdict"]
         assert verdict == "error", f"{oracle.__name__} returned {verdict}"
 
@@ -583,3 +587,44 @@ def test_stale_writer_drill_exercises_stale_completion(tmp_path, mode,
                          and e.get("generation") == 7]
     assert stale_completions, (
         f"no {expected_kind} event for generation 7 in {mode} evidence")
+
+
+def _check_drill_evidence(tmp_path: Path, mode: str) -> dict:
+    run_drill("state-changes-check-does-not", mode, tmp_path)
+    return json.loads(
+        (tmp_path / f"state-changes-check-does-not-{mode}.json").read_text())
+
+
+def test_check_drill_protected_verdict_changes_with_the_state(tmp_path):
+    """The discrimination rail. The protected check runs once while the
+    record is missing and once after it is applied, and answers the two
+    differently; a check pinned to either verdict fails here."""
+    ev = _check_drill_evidence(tmp_path, "protected")
+    observed = ev["oracle"]["observed"]
+    assert observed["verdict_before_repair"] == "fail"
+    assert observed["verdict_after_repair"] == "pass"
+    assert ev["oracle"]["detail"]["discriminates"] is True
+
+
+def test_check_drill_protected_input_is_not_self_written(tmp_path):
+    """The provenance rail. The protected check reads the destination and
+    writes no metadata key, so no evaluation can be reading its own
+    output."""
+    ev = _check_drill_evidence(tmp_path, "protected")
+    observed = ev["oracle"]["observed"]
+    assert observed["basis"] == "destination-readback"
+    assert observed["read_key"].startswith("destination/")
+    assert observed["keys_written_by_the_check"] == []
+    assert observed["self_supplied_inputs"] == []
+    assert ev["oracle"]["detail"]["independent_input"] is True
+
+
+def test_check_drill_unsafe_check_never_goes_red(tmp_path):
+    """The unsafe arm is the failure this drill exists for: the same two
+    evaluations, the same state change at the destination, one verdict."""
+    ev = _check_drill_evidence(tmp_path, "unsafe")
+    observed = ev["oracle"]["observed"]
+    assert observed["verdict_before_repair"] == "pass"
+    assert observed["verdict_after_repair"] == "pass"
+    assert observed["record_at_source"] is True
+    assert observed["self_supplied_inputs"] == ["chk-1/verdict"]

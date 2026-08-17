@@ -32,6 +32,7 @@ EFFECT_ID = "eff-1"
 PRIOR_EFFECT_ID = "eff-0"
 REQUEST_ID = "req-1"
 VIEW_ID = "view-1"
+CHECK_ID = "chk-1"
 CHILD_IDS = ("c-1", "c-2", "c-3")
 STRAGGLER_ID = "c-3"
 MODES = ("protected", "unsafe")
@@ -43,6 +44,7 @@ SCENARIOS = (
     "child-completes-after-join",
     "request-accepted-effect-never-applied",
     "source-advances-view-answers-anyway",
+    "state-changes-check-does-not",
 )
 
 
@@ -409,6 +411,49 @@ def _script_view_lag(f: Factory, mode: str) -> list:
     ]
 
 
+def _script_check_falsifiability(f: Factory, mode: str) -> list:
+    """A check is registered over one destination record, the write that
+    would satisfy it is dropped, and the check is evaluated twice: once
+    while the record is missing and once after a retry puts it there. The
+    state crosses the check's claim between the two evaluations, so a check
+    that reports the state has to answer differently the second time. The
+    protected check reads the destination back and does; the unsafe check
+    stamps its own metadata key and reads that, so it answers pass in both
+    states and its fail branch is never reachable."""
+
+    def register_check():
+        f.claim_work(WORK_ID, attempt=1)
+        f.launch_session(WORK_ID, "worker-1", attempt=1)
+        f.add_check(CHECK_ID, f"destination holds {EFFECT_ID}", EFFECT_ID)
+
+    def attempt_application():
+        def apply():
+            f.apply_effect(WORK_ID, f.attempt_sessions[1], EFFECT_ID,
+                           "payload-1", attempt=1)
+        f.emit_event("effect-application", apply, work_id=WORK_ID,
+                     effect_id=EFFECT_ID, attempt=1)
+
+    def evaluate():
+        if mode == "protected":
+            f.check_by_destination_readback(CHECK_ID)
+        else:
+            f.check_by_self_written_verdict(CHECK_ID)
+
+    def repair_application():
+        f.apply_effect(WORK_ID, f.attempt_sessions[1], EFFECT_ID,
+                       "payload-1", attempt=2)
+
+    return [
+        ("action", "register-check", register_check),
+        ("barrier", "check-registered", None),
+        ("action", "attempt-application", attempt_application),
+        ("action", "evaluate-before-repair", evaluate),
+        ("action", "repair-application", repair_application),
+        ("action", "evaluate-after-repair", evaluate),
+        ("barrier", "run-complete", None),
+    ]
+
+
 _SCRIPT_BUILDERS = {
     "worker-dies-agent-survives": _script_worker_dies,
     "stale-writer-completes": _script_stale_writer,
@@ -417,6 +462,7 @@ _SCRIPT_BUILDERS = {
     "child-completes-after-join": _script_child_after_join,
     "request-accepted-effect-never-applied": _script_request_never_applied,
     "source-advances-view-answers-anyway": _script_view_lag,
+    "state-changes-check-does-not": _script_check_falsifiability,
 }
 
 

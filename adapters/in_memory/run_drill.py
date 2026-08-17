@@ -7,7 +7,7 @@ Usage:
 Drills: worker-dies-agent-survives, stale-writer-completes,
 effect-commits-ack-is-lost, event-is-lost, child-completes-after-join,
 request-accepted-effect-never-applied,
-source-advances-view-answers-anyway.
+source-advances-view-answers-anyway, state-changes-check-does-not.
 
 Exit codes:
     0  protected mode and the oracle passed
@@ -36,9 +36,9 @@ from pathlib import Path
 if __package__ in (None, ""):  # pragma: no cover - script-invocation path
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from adapters.in_memory.adapter import (CHILD_IDS, EFFECT_ID, REQUEST_ID,
-                                        STRAGGLER_ID, VIEW_ID, WORK_ID,
-                                        InMemoryAdapter)
+from adapters.in_memory.adapter import (CHECK_ID, CHILD_IDS, EFFECT_ID,
+                                        REQUEST_ID, STRAGGLER_ID, VIEW_ID,
+                                        WORK_ID, InMemoryAdapter)
 
 
 class DrillError(Exception):
@@ -524,6 +524,107 @@ def _oracle_stale_view(evidence: dict) -> dict:
     }
 
 
+def _oracle_check_falsifiability(evidence: dict) -> dict:
+    """Two checks over one of the factory's own checks.
+
+    Discrimination: a check evaluated on both sides of a state change that
+    crosses its claim must not return the same verdict twice. A check that
+    cannot go red and a check that cannot go green both fail this rail, and
+    they fail it identically, because each returns a constant verdict
+    across a transition it says it distinguishes.
+
+    Provenance: the value a check reads at evaluation time must not be a
+    value that check wrote. Self-supplied input makes the verdict a
+    property of the writer, and the branch reporting the other verdict
+    unreachable.
+
+    Both are recomputed here from the ordered event log and the
+    destination's mutation list, never from the check's own report of
+    whether it is working. They share no input: the discrimination rail
+    reads verdicts and mutations and never a key, the provenance rail reads
+    keys and never a verdict. The verdict only counts if the log shows the
+    check registered, its write dropped, an evaluation while the record was
+    missing, the record then applied, and a second evaluation after that.
+    """
+    events = evidence["events"]
+    effects = evidence["external_effects"]
+    description = ("A check was registered over one destination record, the "
+                   "write was dropped, the check ran, the record was then "
+                   "applied, and the check ran again: its verdict changed "
+                   "with the state and its input was not its own output.")
+    missing = []
+    registered_tick = _first_tick(events, "check-registered",
+                                  check_id=CHECK_ID)
+    if registered_tick is None:
+        missing.append("the check being registered")
+    fault_tick = _first_tick(events, "fault-injected")
+    drop_tick = _first_tick(events, "effect-application-dropped",
+                            effect_id=EFFECT_ID)
+    if drop_tick is None or (fault_tick is not None
+                             and drop_tick <= fault_tick):
+        missing.append("the dropped application of that record")
+    evaluations = [e for e in events
+                   if e.get("kind") == "check-evaluated"
+                   and e.get("check_id") == CHECK_ID]
+    before = next((e for e in evaluations
+                   if drop_tick is not None and e["tick"] > drop_tick), None)
+    if before is None:
+        missing.append("an evaluation while the record was missing")
+    applied_tick = _first_tick(events, "effect-applied", effect_id=EFFECT_ID)
+    if applied_tick is None or (before is not None
+                                and applied_tick <= before["tick"]):
+        missing.append("the record being applied after that evaluation")
+    after = next((e for e in reversed(evaluations)
+                  if applied_tick is not None and e["tick"] > applied_tick),
+                 None)
+    if after is None:
+        missing.append("a second evaluation after the record was applied")
+    if missing:
+        return _preconditions_failed(missing, "check-discriminates-and-reads-"
+                                     "what-it-did-not-write", description)
+
+    at_source = EFFECT_ID in {m["effect_id"] for m in effects["mutations"]}
+    verdict_before = before.get("verdict")
+    verdict_after = after.get("verdict")
+    # The state genuinely crossed the claim between the two evaluations:
+    # the record was missing at the first (its write was dropped) and is
+    # present at the destination now. A check that reports the state has to
+    # report those two differently.
+    discriminates = at_source and verdict_before != verdict_after
+
+    written_keys = {e.get("key") for e in events
+                    if e.get("kind") == "check-key-written"
+                    and e.get("check_id") == CHECK_ID}
+    self_supplied = sorted(
+        {e.get("read_key") for e in evaluations} & written_keys)
+    independent_input = not self_supplied
+
+    if verdict_before is None or verdict_after is None:
+        oracle_verdict = "error"
+    else:
+        oracle_verdict = ("pass" if (discriminates and independent_input)
+                          else "violation")
+    return {
+        "name": "check-discriminates-and-reads-what-it-did-not-write",
+        "description": description,
+        "expected": {"same_verdict_across_the_state_change": False,
+                     "input_written_by_the_check_itself": False},
+        "observed": {"verdict_before_repair": verdict_before,
+                     "verdict_after_repair": verdict_after,
+                     "basis": after.get("basis"),
+                     "read_key": after.get("read_key"),
+                     "record_at_source": at_source,
+                     "keys_written_by_the_check": sorted(written_keys),
+                     "self_supplied_inputs": self_supplied},
+        "detail": {"registered_tick": registered_tick, "drop_tick": drop_tick,
+                   "before_tick": before["tick"],
+                   "applied_tick": applied_tick, "after_tick": after["tick"],
+                   "discriminates": discriminates,
+                   "independent_input": independent_input},
+        "verdict": oracle_verdict,
+    }
+
+
 @dataclass(frozen=True)
 class DrillSpec:
     barrier: str
@@ -571,6 +672,11 @@ DRILLS: dict[str, DrillSpec] = {
         barrier="view-current",
         fault_kind="drop_event",
         oracle=_oracle_stale_view,
+    ),
+    "state-changes-check-does-not": DrillSpec(
+        barrier="check-registered",
+        fault_kind="drop_event",
+        oracle=_oracle_check_falsifiability,
     ),
 }
 
