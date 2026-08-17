@@ -40,6 +40,18 @@ worse to detect than the timeout version, because refusing to act and having
 nothing to act on produce the same output, and a board that renders a refusal
 as a failure teaches its readers to skip the row.
 
+The precondition need not live in the check's own environment. When it is a
+property of the items the check operates over, the refusal generalises: one
+item missing a required field withholds the verdict for every item, including
+the ones that satisfy it, and nothing downstream can see which item caused the
+silence. A publisher that fails closed on any single malformed entry is
+defensible as a policy about correctness and indefensible as a policy about
+availability, and it is usually adopted without anyone noticing a choice was
+made between the two. The question that separates them is whether the
+guarantee being protected is per-item or global. If a bad entry cannot corrupt
+a good one, refusing the whole batch buys nothing and costs the channel, and
+the cost is paid in exactly the situation the channel exists for.
+
 The two directions are the same defect. In each case the check's verdict is
 constant across a state change that crosses its own claim, which means the
 verdict is a property of the check's implementation rather than of the system.
@@ -404,6 +416,24 @@ green. Evidence for both arms lands in `out/evidence/`.
   the installation had two bindings in total and both sat on live sessions, so
   the instrument was blind rather than failing to repair (local observation,
   gascity2026:bin/slack-binding-reaper).
+- The item-level version of the same route cost eleven hours of a channel that
+  existed to carry decisions to one person. A publisher that posts open
+  decisions requires each one to carry a command re-checking that its premise
+  still holds, and aborts the whole run if any single decision fails that
+  requirement. Two decisions were filed without the command, so the publisher
+  refused twenty consecutive runs after ninety-two lifetime successes, and
+  published nothing for the decisions that were correctly stamped either. The
+  diagnosis was precise, correct, and written on every run to a local log file
+  that nothing tails; the only other signal was one more red row on a board of
+  thirty red rows. The repair was to the two items rather than to any code
+  (local observation, gascity2026:bin/decision-ledger-push,
+  gascity2026:bin/decision-premise-check).
+- A premise should assert the fact the claim turns on and no more. The same
+  publisher was nearly given a premise keyed on whether a pull request was
+  still in conflict, which would have refused again within the hour: the
+  forge reported that field as unknown while recomputing it, though the
+  request was plainly still open. The narrower predicate on open-or-not was
+  stable (local observation, gascity2026:bin/decision-premise-check).
 - Ten instruments in one installation have a single outcome word in their
   entire recorded history, one of them having written exactly one line ever
   (local observation, gascity2026:docs/conventions/instrument-contract.md).
@@ -490,6 +520,8 @@ machinery and the written rule and still shipped guards nobody had made fail.
 - gascity2026:bin/dolt-gc-maintenance
 - gascity2026:bin/dolt-flatten-maintenance
 - gascity2026:bin/slack-binding-reaper
+- gascity2026:bin/decision-ledger-push
+- gascity2026:bin/decision-premise-check
 - DeMillo, Lipton, Sayward 1978, Hints on Test Data Selection
 - Papadakis, Kintis, Zhang, Jia, Le Traon, Harman 2019, Mutation Testing
   Advances: An Analysis and Survey
