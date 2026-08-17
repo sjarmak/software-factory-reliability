@@ -33,6 +33,13 @@ first one runs: the repair times out, or lacks permission, or was wired to a
 queue nobody drains. Detections accumulate. Somebody reads the count as a
 measure of how bad the problem is, which is the one thing it is not.
 
+A check that never reaches its own verdict lands in the same direction by a
+different route. A fail-closed precondition can be correct in isolation and
+permanently unsatisfiable in situ, so the check refuses on every run. This is
+worse to detect than the timeout version, because refusing to act and having
+nothing to act on produce the same output, and a board that renders a refusal
+as a failure teaches its readers to skip the row.
+
 The two directions are the same defect. In each case the check's verdict is
 constant across a state change that crosses its own claim, which means the
 verdict is a property of the check's implementation rather than of the system.
@@ -389,6 +396,14 @@ green. Evidence for both arms lands in `out/evidence/`.
 - The first of those instruments verified 25 of 25 databases on its next
   production run and reclaimed 171 MiB, its first complete sweep in four days
   (local observation, gascity2026:docs/asks-and-outcomes.md).
+- A reconciler for messaging bindings refused to run on 93 consecutive
+  occasions over three days, after 91 completions, because it keyed an agent
+  slot on a session template and a warm pool put four live sessions behind one
+  template. That is correct pool behaviour rather than drift, so the
+  precondition can never be satisfied again. Nothing was lost while it held:
+  the installation had two bindings in total and both sat on live sessions, so
+  the instrument was blind rather than failing to repair (local observation,
+  gascity2026:bin/slack-binding-reaper).
 - Ten instruments in one installation have a single outcome word in their
   entire recorded history, one of them having written exactly one line ever
   (local observation, gascity2026:docs/conventions/instrument-contract.md).
@@ -474,6 +489,7 @@ machinery and the written rule and still shipped guards nobody had made fail.
 - gascity2026:bin/cass-index-refresh
 - gascity2026:bin/dolt-gc-maintenance
 - gascity2026:bin/dolt-flatten-maintenance
+- gascity2026:bin/slack-binding-reaper
 - DeMillo, Lipton, Sayward 1978, Hints on Test Data Selection
 - Papadakis, Kintis, Zhang, Jia, Le Traon, Harman 2019, Mutation Testing
   Advances: An Analysis and Survey
