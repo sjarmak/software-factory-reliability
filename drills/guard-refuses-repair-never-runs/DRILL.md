@@ -178,8 +178,8 @@ Protected mode exits 0; unsafe mode exits 2. Both write evidence under
 out/evidence/.
 
 ```
-python3 -m adapters.in_memory.run_drill guard-refuses-repair-never-runs --mode protected
-python3 -m adapters.in_memory.run_drill guard-refuses-repair-never-runs --mode unsafe
+python3 src/adapters/in_memory/run_drill.py guard-refuses-repair-never-runs --mode protected
+python3 src/adapters/in_memory/run_drill.py guard-refuses-repair-never-runs --mode unsafe
 ```
 
 In the simulator the work item is `w-1`, the resource is `res-1`, and the

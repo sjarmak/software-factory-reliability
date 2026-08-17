@@ -1,17 +1,22 @@
-# Quickstart
+# Quickstart: use this on your own factory
 
-One session, under an hour: review a deliberately unsafe contract, compare it
-with a clean one, render, run a fault drill in both modes, then start a
-contract for your own factory.
+This is the adopt path. One session, under an hour: review a deliberately
+unsafe contract, compare it with a clean one, render, run a fault drill in
+both modes, then start a contract for your own factory.
+
+If you have not run `make demo` yet, start with the
+[README](README.md) instead. That is the learn path, and it takes five
+minutes.
 
 Requirements: Python 3.10 or later, plus the packages in
 `requirements-dev.txt` (`pip install -r requirements-dev.txt`: pyyaml and
-jsonschema for the CLI, pytest for the test suite). Everything runs locally.
+jsonschema for the CLI, pytest for the test suite). Everything runs locally,
+with no install step and no `PYTHONPATH`.
 
 ## 1. Validate the unsafe example
 
 ```
-python3 cmd/factory-check/factory_check.py validate examples/unsafe-factory.yaml
+python3 src/factory_check.py validate examples/unsafe-factory.yaml
 ```
 
 Expected output:
@@ -26,7 +31,7 @@ promise nothing enforceable; that is the point of this example.
 ## 2. Review it
 
 ```
-python3 cmd/factory-check/factory_check.py review examples/unsafe-factory.yaml
+python3 src/factory_check.py review examples/unsafe-factory.yaml
 ```
 
 The review prints each finding as a severity and rule id followed by the
@@ -46,26 +51,31 @@ and the totals line for this contract is:
 6 FAIL, 10 WARN
 ```
 
-Exit status is nonzero on any FAIL. Each rule id maps to a pattern page:
-AUTH-002 to `patterns/fenced-authority.md`, VERIFY-001 to
-`patterns/verify-before-publish.md`, CAMP-001 to
-`patterns/cross-repo-campaigns.md`. The totals are pinned by the test suite,
-so if your checkout prints different numbers, the catalog changed and this
-page is what needs updating.
+Exit status is nonzero on any FAIL. Every rule id maps to a pattern page, and
+[docs/contract-reference.md](docs/contract-reference.md) is the index: what
+each of the twenty-three rules checks, which contract path it lands on, and
+which pattern explains it. The totals are pinned by the test suite, so if your
+checkout prints different numbers, the catalog changed and this page is what
+needs updating.
+
+If you would rather find the defects yourself before the checker names them,
+[examples/README.md](examples/README.md) turns this contract into an exercise
+with the answer key folded away.
 
 Older write-ups quote **6 FAIL, 9 WARN** for this contract. That was correct
 at v0.1 (`4744374`); `03e36b8` added the CODE-000 rule and the tenth warning
 came with it. Until 2026-08-16 the suite pinned the rule multiset but nothing
 compared it to the numbers printed on this page, so this line was updated by
 hand and the published article was not. The catalog and its documentation
-drifted with no mechanism that could notice. `test_quickstart_counts_match_the_unsafe_example`
-now reads the totals line out of this file, which is the whole point the kit
-makes about cached beliefs, applied to the kit.
+drifted with no mechanism that could notice. `test_published_counts_match_the_examples`
+now reads the totals line out of this file, and out of every other page that
+quotes one, which is the whole point the kit makes about cached beliefs,
+applied to the kit.
 
 ## 3. Review a clean contract
 
 ```
-python3 cmd/factory-check/factory_check.py review examples/issue-to-pr/factory.yaml
+python3 src/factory_check.py review examples/issue-to-pr/factory.yaml
 ```
 
 Expected:
@@ -80,7 +90,7 @@ the verification verdict binds to, and how completion is defined.
 ## 4. Render it
 
 ```
-python3 cmd/factory-check/factory_check.py render examples/issue-to-pr/factory.yaml
+python3 src/factory_check.py render examples/issue-to-pr/factory.yaml
 ls out/
 ```
 
@@ -91,7 +101,7 @@ will not read YAML.
 ## 5. Run a drill, both modes
 
 ```
-python3 -m adapters.in_memory.run_drill stale-writer-completes --mode unsafe
+python3 src/adapters/in_memory/run_drill.py stale-writer-completes --mode unsafe
 ```
 
 Expected output:
@@ -107,7 +117,7 @@ identity mappings, and the oracle's verdict; read it to see the stale
 generation-7 write and completion being accepted after generation 8.
 
 ```
-python3 -m adapters.in_memory.run_drill stale-writer-completes --mode protected
+python3 src/adapters/in_memory/run_drill.py stale-writer-completes --mode protected
 ```
 
 Expected output:
@@ -122,15 +132,19 @@ the destination. Keep both evidence files: the unsafe run is your proof that
 the drill can detect the violation at all. A drill whose unsafe mode passes is
 testing nothing.
 
+Both runs of this drill are committed, with a line-by-line reading, in
+[evidence/case-studies/stale-writer/](evidence/case-studies/stale-writer/).
+Diff your output against them; they are byte-for-byte reproducible.
+
 ## 6. Start your own contract
 
 ```
-python3 cmd/factory-check/factory_check.py init my-factory.yaml
+python3 src/factory_check.py init my-factory.yaml
 ```
 
 If step 1 below is where you stall, because the topology drifted, the store
 disagrees with the world, or nobody can say which work items still exist,
-start with [recipes/factory-recovery.md](recipes/factory-recovery.md) instead
+start with [docs/recipes/factory-recovery.md](docs/recipes/factory-recovery.md) instead
 and come back here with its inventory.
 
 Then work the loop:

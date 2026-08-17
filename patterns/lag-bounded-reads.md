@@ -1,5 +1,24 @@
 # Lag-Bounded Reads
 
+> **Problem** A derived view answers a query from whatever prefix of
+> history it happens to hold.
+>
+> **Rule** A view that cannot state its position cannot state a result.
+>
+> **Required property** The view publishes the source position it has
+> consumed and answers only within a declared freshness contract; a query
+> it cannot meet returns lag-exceeded naming both positions, and a view
+> with no published position returns lag-unknown.
+>
+> **Wrong** `query the view -> return rows`
+>
+> **Right** `query the view -> compare its published position against the contract -> answer or return lag-exceeded`
+>
+> **See it fail**
+>
+> - `make drill DRILL=source-advances-view-answers-anyway MODE=unsafe` exits 2
+> - `make drill DRILL=source-advances-view-answers-anyway MODE=protected` exits 0
+
 ## Problem
 
 A derived read model is any store built by consuming the source of truth's
@@ -257,8 +276,8 @@ advances, and the update carrying the new record is dropped. The drill is
 executable against the in-memory simulator in both modes.
 
 ```
-python3 -m adapters.in_memory.run_drill source-advances-view-answers-anyway --mode protected
-python3 -m adapters.in_memory.run_drill source-advances-view-answers-anyway --mode unsafe
+python3 src/adapters/in_memory/run_drill.py source-advances-view-answers-anyway --mode protected
+python3 src/adapters/in_memory/run_drill.py source-advances-view-answers-anyway --mode unsafe
 ```
 
 The protected arm compares the view's published position against a freshly

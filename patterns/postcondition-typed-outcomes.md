@@ -1,5 +1,25 @@
 # Postcondition-Typed Outcomes
 
+> **Problem** A command returns success because the call returned, not
+> because the change landed.
+>
+> **Rule** The return value classifies the postcondition, read back from
+> the destination.
+>
+> **Required property** Success is returned only when the requested change
+> is durably present; otherwise the outcome names which weaker state holds
+> instead, from a closed vocabulary the caller can branch on, with unknown
+> available when neither assertion can be supported.
+>
+> **Wrong** `destination replies 202 -> return success`
+>
+> **Right** `read back the destination -> return applied, accepted but not applied, or unknown`
+>
+> **See it fail**
+>
+> - `make drill DRILL=request-accepted-effect-never-applied MODE=unsafe` exits 2
+> - `make drill DRILL=request-accepted-effect-never-applied MODE=protected` exits 0
+
 ## Problem
 
 A command boundary sits between an operator or an agent and the system: a CLI
@@ -386,8 +406,8 @@ acceptance, and the destination never receives the mutation. The drill is
 executable against the in-memory simulator in both modes.
 
 ```
-python3 -m adapters.in_memory.run_drill request-accepted-effect-never-applied --mode protected
-python3 -m adapters.in_memory.run_drill request-accepted-effect-never-applied --mode unsafe
+python3 src/adapters/in_memory/run_drill.py request-accepted-effect-never-applied --mode protected
+python3 src/adapters/in_memory/run_drill.py request-accepted-effect-never-applied --mode unsafe
 ```
 
 The protected arm classifies by reading the destination back, returns

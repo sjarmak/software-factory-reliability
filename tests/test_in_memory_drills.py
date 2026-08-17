@@ -15,13 +15,14 @@ import jsonschema
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
 
 from adapters.in_memory.adapter import InMemoryAdapter  # noqa: E402
 from adapters.in_memory.run_drill import DRILLS, MODES, run_drill  # noqa: E402
 
-SCHEMA = json.loads((ROOT / "adapters" / "protocol.schema.json").read_text())
+SCHEMA = json.loads((SRC / "adapters" / "protocol.schema.json").read_text())
 
 EXPECTED_EXIT = {"protected": 0, "unsafe": 2}
 EXPECTED_VERDICT = {"protected": "pass", "unsafe": "violation"}

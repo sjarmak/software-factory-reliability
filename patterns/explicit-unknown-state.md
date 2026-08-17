@@ -1,5 +1,27 @@
 # Explicit Unknown State
 
+> **Problem** An interrupted effect is recorded as succeeded or failed
+> when nobody knows which.
+>
+> **Rule** UNKNOWN is a third state, and it is not FAILED.
+>
+> **Required property** Recovery models KNOWN_SUCCEEDED, KNOWN_FAILED, and
+> UNKNOWN, and an UNKNOWN resolves by returning the recorded result,
+> converging on the same external state, or stopping with an escalation
+> that names the effect and reaches a decision owner.
+>
+> **Wrong** `timeout -> treat as failed -> retry`
+>
+> **Right** `timeout -> UNKNOWN -> read back, converge, or escalate by name`
+>
+> **See it fail**
+>
+> - `make drill DRILL=effect-commits-ack-is-lost MODE=unsafe` exits 2
+> - `make drill DRILL=effect-commits-ack-is-lost MODE=protected` exits 0
+>
+> **Checked by** `EFFECT-003` in the [rule
+> catalog](../docs/contract-reference.md)
+
 ## Problem
 
 Every external call has a window between the destination committing the

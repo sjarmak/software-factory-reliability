@@ -135,6 +135,6 @@ Protected mode exits 0; unsafe mode exits 2. Both write evidence under
 out/evidence/.
 
 ```
-python3 -m adapters.in_memory.run_drill stale-writer-completes --mode protected
-python3 -m adapters.in_memory.run_drill stale-writer-completes --mode unsafe
+python3 src/adapters/in_memory/run_drill.py stale-writer-completes --mode protected
+python3 src/adapters/in_memory/run_drill.py stale-writer-completes --mode unsafe
 ```

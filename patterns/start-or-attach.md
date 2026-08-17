@@ -1,5 +1,26 @@
 # Start-or-Attach
 
+> **Problem** A retry launches a second executor while the first is still
+> running.
+>
+> **Rule** Look for a live session before you launch one.
+>
+> **Required property** For one work_id and generation, at most one live
+> executor session exists, and executor creation happens only through a
+> decision that is atomic with the session registry.
+>
+> **Wrong** `retry -> launch an executor`
+>
+> **Right** `retry -> atomic registry lookup -> attach to the live session, or launch and register in one step`
+>
+> **See it fail**
+>
+> - `make drill DRILL=worker-dies-agent-survives MODE=unsafe` exits 2
+> - `make drill DRILL=worker-dies-agent-survives MODE=protected` exits 0
+>
+> **Checked by** `RECON-002` in the [rule
+> catalog](../docs/contract-reference.md)
+
 ## Problem
 
 A retrying orchestrator must produce an executor for a claim it holds. Naive

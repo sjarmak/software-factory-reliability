@@ -174,8 +174,8 @@ Protected mode exits 0; unsafe mode exits 2. Both write evidence under
 out/evidence/.
 
 ```
-python3 -m adapters.in_memory.run_drill child-completes-after-join --mode protected
-python3 -m adapters.in_memory.run_drill child-completes-after-join --mode unsafe
+python3 src/adapters/in_memory/run_drill.py child-completes-after-join --mode protected
+python3 src/adapters/in_memory/run_drill.py child-completes-after-join --mode unsafe
 ```
 
 In the simulator the parent is `w-1`, the children are `c-1`, `c-2`, and the

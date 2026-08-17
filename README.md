@@ -1,152 +1,181 @@
 # software-factory-reliability
 
-Contracts, fault drills, and observability conventions for coding-agent fleets.
+Coding agents fail in ways that look strange until you treat the software
+factory around them as a distributed system. Then the strangeness resolves
+into a short list of familiar failures: stale workers, duplicate effects, lost
+work, false completion, retry storms, and publication nobody can verify.
 
-This kit is for anyone building a software factory: a system that converts
-issues, migration plans, and operational evidence into reviewed, tested, landed
-code changes, using coding agents as the workers. It is stack-neutral by
-design. Whether the factory runs on cron and flat files, a queue and a
-database, or a durable workflow engine, the kit gives you a vocabulary to
-declare the promises the factory makes, a checker that reviews those promises
-against known failure boundaries, and executable fault drills that try to break
-them before production does.
+This repository is the executable companion to
+[Software Factories Are Distributed Systems](https://www.sjarmak.ai/writing/software-factories-are-distributed-systems).
+It holds small examples and fault-injection drills for the failure modes the
+essay describes, plus a checker that reads a description of your factory and
+tells you which of those boundaries you have left open.
 
-## The premise
+Want to see the core problem? Run this:
 
-The workers are probabilistic; the factory still keeps its promises. A coding
-agent can produce different output on identical input, misreport its own
-progress, and keep writing after it has been replaced. None of that excuses the
-factory from being deterministic about three things: which work exists, who may
-write, and which effects happened. One production installation states the
-constraint directly, "agents are nondeterministic; the factory must not be",
-and rebuilds state from durable facts rather than an agent's memory on every
-recovery (local observation,
-gascity2026:docs/design/software-factory-philosophy.md).
+```bash
+git clone https://github.com/sjarmak/software-factory-reliability
+cd software-factory-reliability
+make demo
+```
 
-Implementations vary; the failure boundaries recur. A controlled durability lab
-ran the same crash placement (kill the worker after the external effect, before
-the completion record) against four different integration layers: a direct
-model CLI, a sandbox harness, a native agent loop, and a plain activity retry.
-Every unsafe arm applied the external effect twice while the engine recorded
-one completion; every protected arm applied it once (local observation,
-temporallab2026:docs/guarantees.md). In production, two
-independently written loops, a workflow-engine cycle and a shell poller, showed
-the identical at-most-once-then-abandon shape on the same day, 2026-07-16
-(local observation,
-gascity2026:docs/design/durable-execution-walkthrough-pr-state-poller.md).
-The boundaries belong to the problem; a different stack relocates them.
+## See a software factory fail in five minutes
 
-Work identity survives executors; authority does not. These two properties move
-in opposite directions, and conflating them is behind most duplicate-effect
-incidents in the evidence base. A work item needs a stable logical identity
-that outlives any process, so that a retry converges on the same work instead
-of forking it: in the lab, a stable session key made two activity attempts
-converge on one external process after a worker was killed (local observation,
-temporallab2026:docs/findings/0001-worker-death-surviving-agent.md).
-An executor's authority must do the opposite and die with its generation, so
-that a stale writer cannot land effects after replacement: in the same lab,
-unsafe systems accepted four obsolete generation-7 actions after generation 9
-became current, and fenced systems accepted zero (local observation,
-temporallab2026:docs/guarantees.md).
+`make demo` builds two factories that differ in exactly one place: where the
+ownership fence is checked. It runs the same fault against both, and narrates
+the two event logs the runs actually produced.
 
-The kit operationalizes this. You describe your factory in a contract file,
-`factory-check review` flags the recurring failure boundaries it can see in the
-description, the pattern pages explain each boundary with its enforcement
-point, and the drills inject the corresponding fault against a simulated
-factory so you can watch the unsafe variant fail and the protected variant
-hold. Evidence from each drill run is retained, because a guarantee you cannot
-show evidence for is a guess.
+```
+One work item, one lease expiry, two factories. The factories differ in
+exactly one place: where the ownership fence is checked.
 
-## Repo map
+UNSAFE  (fence checked by the writer, then an unconditional write)
+  generation 7 holds the claim and has prepared artifact-g7
+  generation 7 loses ownership
+  generation 8 becomes current
+  generation 8 writes artifact-g8
+  generation 8 records the work complete
+  generation 7 writes artifact-g7 anyway
+  destination applies it, nothing checks the generation
+  generation 7 records the work complete
+  destination holds artifact-g7                               FAIL
+
+PROTECTED  (fence checked at the destination, atomically with the write)
+  generation 7 holds the claim and has prepared artifact-g7
+  generation 7 loses ownership
+  generation 8 becomes current
+  generation 8 publishes artifact-g8
+  generation 8 records the work complete
+  generation 7 attempts to publish artifact-g7
+  destination rejects the stale writer, current is 8
+  generation 7 attempts to record completion
+  destination rejects the stale completion
+  destination holds artifact-g8                               PASS
+```
+
+The unsafe factory lost generation 8's work and published a superseded
+artifact under a completion record that says everything went fine. This is the
+failure the essay describes in "Authority has to expire cleanly".
+
+Nothing in that output is a canned transcript. Every line is rendered from an
+event in `out/evidence/stale-writer-completes-{unsafe,protected}.json`, an
+unrecognized event kind prints raw, and a run whose oracle verdict is not the
+expected one fails the demo. Requirements are Python 3.10 or newer and
+`pip install -r requirements-dev.txt`.
+
+## The ideas from the essay, and where to watch each one break
+
+| Essay idea | See it fail | Pattern |
+| --- | --- | --- |
+| The work outlives the worker | `make drill DRILL=worker-dies-agent-survives MODE=unsafe` | [Durable intent](patterns/durable-intent.md) |
+| Authority has to expire cleanly | `make demo` | [Fenced authority](patterns/fenced-authority.md) |
+| External effects need their own contract | `make drill DRILL=effect-commits-ack-is-lost MODE=unsafe` | [Effect identity](patterns/effect-identity.md) |
+| Events make it fast, reconciliation makes it true | `make drill DRILL=event-is-lost MODE=unsafe` | [Reconciliation](patterns/reconciliation.md) |
+| Recovery is a measurement | `make drill DRILL=state-changes-check-does-not MODE=unsafe` | [Falsifiable checks](patterns/falsifiable-checks.md) |
+| Capacity policy sits above the queues | [`drills/retry-storm/`](drills/retry-storm/DRILL.md) (specification) | [Topology-aware scheduling](patterns/topology-aware-scheduling.md) |
+| "Done" has to mean something | [`drills/artifact-changes-after-verification/`](drills/artifact-changes-after-verification/DRILL.md) (specification) | [Verify before publish](patterns/verify-before-publish.md) |
+
+Every `MODE=unsafe` command above is expected to exit 2. An unsafe control
+that passes means the fault never reached the boundary, which makes it a
+broken test rather than a safe system. Swap in `MODE=protected` and the same
+drill exits 0.
+
+## The shape of the thing
+
+```mermaid
+flowchart LR
+  WI["work item<br/>work_id, stable for its whole life"] --> SCHED["scheduler"]
+  SCHED -->|"claim: work_id at generation 7"| W["agent worker<br/>attempt_id, session_id"]
+
+  subgraph AUTH["authority boundary: the destination checks, the writer does not"]
+    direction TB
+    LEDGER[("work ledger<br/>claims, generations, artifact facts")]
+    DEST["external effect<br/>code host, deploy, ticket"]
+  end
+
+  W -->|"write under generation 7"| LEDGER
+  W -->|"one effect per effect_id"| DEST
+  LEDGER -->|"intended state"| RECON["reconcile loop<br/>level-triggered, rereads truth"]
+  DEST -->|"observed state"| RECON
+  RECON -->|"repair or escalate"| LEDGER
+```
+
+Everything inside the boundary evaluates the generation atomically with the
+write. A worker that lost its claim still holds credentials and still believes
+it is current, so the thing that reliably stops it is a destination that
+refuses. The full authority-plane, identity, and campaign diagrams are in
+[`docs/diagrams/`](docs/diagrams/).
+
+## Three ways to use this
+
+**Five minutes: break a factory.** Run `make demo`, then run one drill in both
+modes and diff the two evidence files. The drill directory holds the fault
+placement, the oracle, and what the evidence must contain.
+
+```bash
+make drill DRILL=effect-commits-ack-is-lost MODE=unsafe     # exits 2
+make drill DRILL=effect-commits-ack-is-lost MODE=protected  # exits 0
+diff out/evidence/effect-commits-ack-is-lost-{unsafe,protected}.json
+```
+
+**Fifteen minutes: read the five patterns that carry the rest.** Each pattern
+page opens with a compact box (problem, rule, required property, the wrong
+shape, the right shape) and then goes deep: the invariant, the enforcement
+boundary, the falsifying test, and the evidence retained.
+
+1. [Stable work identity](patterns/stable-work-identity.md): one logical item, one id, for life.
+2. [Fenced authority](patterns/fenced-authority.md): ownership is not authority.
+3. [Effect identity](patterns/effect-identity.md): unbounded attempts, one physical effect.
+4. [Verify before publish](patterns/verify-before-publish.md): the verdict binds to an immutable artifact.
+5. [Reconciliation](patterns/reconciliation.md): every event path has a level-triggered twin.
+
+The other eleven pages are indexed in [`patterns/`](patterns/README.md).
+
+**Use it on your own factory.** Describe the factory in a contract file and
+let the checker tell you which boundaries are open.
+
+```bash
+python3 src/factory_check.py init factory.yaml   # a starter, "unknown" where you must decide
+python3 src/factory_check.py review factory.yaml # findings, one per open boundary
+```
+
+[QUICKSTART.md](QUICKSTART.md) walks the full first session under an hour, and
+[`docs/contract-reference.md`](docs/contract-reference.md) documents every
+section and all twenty-three rules.
+
+## What is in here
 
 | Path | Contents |
 | --- | --- |
-| `schemas/` | JSON Schemas for factory contracts, campaigns, guarantees, and work manifests |
-| `cmd/factory-check/` | Python CLI: `init`, `validate`, `review`, `render` |
-| `examples/` | A minimal factory, an issue-to-PR pipeline, a long-running agent, a cross-repo migration, and a deliberately unsafe contract |
-| `patterns/` | Sixteen pattern pages, one per recurring failure boundary |
-| `drills/` | Thirteen fault-drill specifications; nine are executable against the simulator |
-| `adapters/` | The adapter protocol and an in-memory simulator that runs drills |
-| `recipes/` | Five worked recipes: four factory shapes, plus a recovery path |
-| `fixtures/` | Multi-repo and single-repo fixtures used by drills and tests |
-| `observability/` | Event conventions, latency expectations, sample events, queries, coverage |
-| `evidence/` | The evidence map (per-pattern claims with basis labels) and sources |
-| `diagrams/` | Mermaid diagrams: authority planes, identity stack, campaign coverage loop |
-| `scripts/` | `prose-check.py` and `schema_check.py`, run by `make check` |
-| `tests/` | Test suite for the CLI, adapters, and drills |
+| [`patterns/`](patterns/README.md) | sixteen failure boundaries, each with an invariant, an enforcement point, and a falsifying test |
+| [`drills/`](drills/README.md) | thirteen fault drills; nine run against the in-memory simulator, four are specifications |
+| [`examples/`](examples/README.md) | four worked factories, and one plausible-looking contract with six defects in it |
+| [`evidence/`](evidence/case-studies/) | reproducible case-study bundles you can rerun and diff, plus the per-claim evidence map |
+| [`schemas/`](schemas/) | JSON Schemas for contracts, campaigns, guarantees, and work manifests |
+| [`docs/`](docs/design.md) | design, evidence methodology, contract reference, recipes, observability conventions |
 
-## Recipes
+Start with [`examples/README.md`](examples/README.md) if you would rather find
+the defects yourself before the checker names them.
 
-Each recipe names the patterns a factory shape requires, the contract sections
-that declare them, and the drills that test them.
+## Going deeper
 
-- [issue-to-pull-request](recipes/issue-to-pull-request.md): one issue in, one
-  verified pull request out.
-- [background-maintenance](recipes/background-maintenance.md): recurring
-  convergent housekeeping, and the case for a timer over an engine.
-- [cross-repository-migration](recipes/cross-repository-migration.md): one
-  change fanned across many repositories, joined by coverage.
-- [human-approved-production-effect](recipes/human-approved-production-effect.md):
-  an irreversible mutation gated on a named human decision.
-- [factory-recovery](recipes/factory-recovery.md): the entry point when the
-  factory is already broken. The other four assume you can describe your
-  factory; this one recovers enough truth to write the contract in the first
-  place.
+- [docs/design.md](docs/design.md): the premise, why work identity and
+  authority move in opposite directions, and how the pieces fit.
+- [docs/evidence-methodology.md](docs/evidence-methodology.md): what declared,
+  enforced, and fault-tested mean; the four basis labels; and why this kit
+  computes no maturity score.
+- [docs/contract-reference.md](docs/contract-reference.md): every contract
+  section and every rule the review can emit.
+- [docs/recipes/](docs/recipes/): four factory shapes worked end to end, plus a
+  recovery path for a factory that is already broken.
+- [docs/observability/](docs/observability/): event conventions, latency
+  expectations, sample events, and queries.
 
-## Evidence states
+## Contributing
 
-Every guarantee in a factory contract carries one of three evidence states:
-
-- **declared**: the contract names the promise and the boundary it holds at.
-  Nothing checks it yet. This is still useful; a named promise can be reviewed
-  and falsified, an unnamed one cannot.
-- **enforced**: a mechanism at the named boundary rejects violations, and the
-  review can point at it. Enforcement at the wrong layer does not count; a
-  caller-side check does not enforce a destination-side promise.
-- **fault-tested**: an executed drill injected the specific fault the promise
-  guards against, the unsafe control violated the oracle, the protected run
-  passed, and the evidence from both runs is retained.
-
-Evidence states attach to individual guarantees, and the kit deliberately
-defines no aggregate maturity score. A factory with nine fault-tested
-guarantees and one declared-only guarantee on its merge path is not ninety
-percent safe; it is unsafe at the merge path, and an average conceals exactly
-the number that matters. External mutations are the worst loss class in the
-production evidence (a duplicate merge is worse than a skipped cycle), so
-safety is set by the weakest external-mutation boundary, not by the mean.
-Aggregates also redirect effort toward raising a count: the evidence base
-includes a health surface where 83 of 106 live checks reported green without
-ever examining whether work moved (local observation,
-gascity2026:docs/design/city-reliability-surface.md). A single score
-invites the same drift at the contract level.
-
-## Sources
-
-Three evidence bases inform the patterns, drills, and conventions here. The
-first is a production multi-agent installation whose field failures between
-2026-04 and 2026-08 are documented in incident reports, root-cause analyses,
-and reliability surveys; it supplies most of the named outages and the
-counts. The second is a controlled durability lab that ran preregistered
-fault-injection experiments against a workflow engine, always with an unsafe
-negative control and preserved raw evidence; it supplies the identity and
-fencing results. The third is the experiments in a book manuscript on
-engineering reliable coding agents (2026), which supply the guarded-mutation
-demonstrations and the scheduling replay. Each factual claim in the kit is
-labeled with its basis in `evidence/evidence-map.yaml` (foundational,
-agent-era, local observation, or inference), and system names appear only in
-citations, never as recommendations. Local observations are cited as
-`<bibkey>:<path>`, where the key names one of the three unpublished sources
-in `evidence/sources.bib` and the path identifies a document inside it; the
-underlying documents are not public, so these citations locate a claim's
-origin rather than link to it. Inferences are marked as such; two of the
-syntheses in this kit (the in-flight change graph for campaigns and
-conflict-graph scheduling for fleets) have not been demonstrated end to end.
-
-## Getting started
-
-Read `QUICKSTART.md` for a first session that takes under an hour: validate
-and review the deliberately unsafe example, compare it with a clean contract,
-run one drill in both unsafe and protected modes, then initialize a contract
-for your own factory. `STYLE.md` covers the writing rules if you contribute
-prose; `make check` runs the schema checker, the prose checker, the tests, and
-the executable drills.
+`make check` runs the schema checker, the prose checker, the test suite, and
+all nine executable drills. Prose rules are in [docs/style.md](docs/style.md);
+they are enforced, not advisory, and the em dash rule has no exemptions
+anywhere in the repository. A new pattern page must name an invariant, an
+enforcement boundary, a falsifying test, and the evidence retained. A new
+drill must fail in unsafe mode.

@@ -1,5 +1,27 @@
 # Reconciliation
 
+> **Problem** A lost event leaves the system out of sync forever, and
+> nothing notices.
+>
+> **Rule** Events make it fast; reconciliation makes it true.
+>
+> **Required property** For every transition the system advances by event,
+> a level-triggered query against authoritative state detects and repairs
+> the same transition with no event delivered. Repairs are idempotent, and
+> a failed lookup yields LOOKUP_FAILED rather than a negative result.
+>
+> **Wrong** `event arrives -> advance state; no event -> nothing happens`
+>
+> **Right** `scan authoritative state -> compare against intent -> repair idempotently`
+>
+> **See it fail**
+>
+> - `make drill DRILL=event-is-lost MODE=unsafe` exits 2
+> - `make drill DRILL=event-is-lost MODE=protected` exits 0
+>
+> **Checked by** `RECON-001` in the [rule
+> catalog](../docs/contract-reference.md)
+
 ## Problem
 
 Event-driven wiring is edge-triggered: it fires when a transition is

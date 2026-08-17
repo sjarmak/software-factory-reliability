@@ -4,14 +4,15 @@ Every test drives the CLI as a subprocess, the same way the Makefile and
 operators do, so exit codes and printed output are covered together.
 """
 
-import json
 import collections
+import json
+import re
 import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-CLI = ROOT / "cmd" / "factory-check" / "factory_check.py"
+CLI = ROOT / "src" / "factory_check.py"
 EXAMPLES = ROOT / "examples"
 ISSUE_TO_PR = EXAMPLES / "issue-to-pr" / "factory.yaml"
 UNSAFE = EXAMPLES / "unsafe-factory.yaml"
@@ -45,6 +46,19 @@ def test_validate_accepts_every_example():
     result = run_cli("validate", *files)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "INVALID" not in result.stdout
+
+
+def test_validate_skips_the_estate_fixtures_by_name():
+    """A code estate has no schema. Validate must say so rather than check
+    it against the contract schema and report the mismatch as a defect, and
+    it must not report the file as OK either."""
+    estates = sorted(EXAMPLES.rglob("estate.yaml"))
+    assert estates, "no estate fixtures found"
+    result = run_cli("validate", *[str(p) for p in estates])
+    assert result.returncode == 0, result.stdout + result.stderr
+    for path in estates:
+        assert f"{path}: SKIP (code estate;" in result.stdout, result.stdout
+    assert f"{len(estates)} file(s) skipped" in result.stdout
 
 
 def test_validate_rejects_invalid_file(tmp_path):
@@ -163,7 +177,7 @@ def test_review_rejects_schema_invalid_contract(tmp_path):
 # Regression tests for the 2026-08-09 review findings. Each pins a hole
 # that the original suite let coexist with 47 green tests.
 
-sys.path.insert(0, str(ROOT / "cmd" / "factory-check"))
+sys.path.insert(0, str(ROOT / "src"))
 import rules as rules_mod  # noqa: E402
 
 
@@ -454,14 +468,47 @@ def test_reference_example_findings_are_exactly_as_documented(tmp_path):
             f"{relative}: summary line disagrees with the per-rule pins ({total} pinned)"
 
 
-def test_quickstart_counts_match_the_unsafe_example(tmp_path):
-    """QUICKSTART prints a literal count; keep it honest against the rules."""
-    result = run_cli("review", str(UNSAFE), "--out", str(tmp_path))
+# Pages that print a literal review summary for an example. A rule change
+# that moves a count has to move the prose with it, or this fails.
+PUBLISHED_COUNTS = {
+    "unsafe-factory.yaml": ("QUICKSTART.md", "examples/README.md",
+                            "docs/contract-reference.md"),
+    "minimal-factory.yaml": ("examples/README.md",),
+}
+
+
+def _summary_line(result):
     summary = [line for line in result.stdout.splitlines()
                if line.endswith("WARN") and "FAIL," in line]
     assert len(summary) == 1, result.stdout
-    assert summary[0] in (ROOT / "QUICKSTART.md").read_text(), (
-        f"QUICKSTART.md does not contain the current summary line {summary[0]!r}")
+    return summary[0]
+
+
+def test_published_counts_match_the_examples(tmp_path):
+    """Every page quoting a literal count stays honest against the rules."""
+    for example, pages in PUBLISHED_COUNTS.items():
+        result = run_cli("review", str(EXAMPLES / example),
+                         "--out", str(tmp_path / example))
+        summary = _summary_line(result)
+        for page in pages:
+            assert summary in (ROOT / page).read_text(), (
+                f"{page} does not contain the current summary line "
+                f"{summary!r} for {example}")
+
+
+def test_contract_reference_documents_every_rule():
+    """A new rule id is undocumented until the reference page names it."""
+    catalog = set(re.findall(r'"([A-Z]+-\d{3})"',
+                             (ROOT / "src" / "rules.py").read_text()))
+    assert catalog, "no rule ids found in src/rules.py"
+    reference = (ROOT / "docs" / "contract-reference.md").read_text()
+    documented = set(re.findall(r'`([A-Z]+-\d{3})`', reference))
+    assert catalog - documented == set(), (
+        "rules with no entry in docs/contract-reference.md: "
+        f"{sorted(catalog - documented)}")
+    assert documented - catalog == set(), (
+        "docs/contract-reference.md names rules that do not exist: "
+        f"{sorted(documented - catalog)}")
 
 
 def test_recon001_reports_once_per_destination_not_once_per_effect():

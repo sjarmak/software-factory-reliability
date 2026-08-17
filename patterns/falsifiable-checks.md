@@ -1,5 +1,27 @@
 # Falsifiable Checks
 
+> **Problem** A check reports green and has never been observed to report
+> anything else.
+>
+> **Rule** A check nobody has watched go red is not evidence.
+>
+> **Required property** A check is admitted only after a demonstrated
+> state change flips its verdict, with the mutation and the named test
+> that goes red recorded next to it, and its verdict is computed from an
+> input neither the check nor the component under check produced.
+>
+> **Wrong** `component reports healthy -> check passes`
+>
+> **Right** `read independent state -> compute verdict -> a recorded mutation turns it red`
+>
+> **See it fail**
+>
+> - `make drill DRILL=state-changes-check-does-not MODE=unsafe` exits 2
+> - `make drill DRILL=state-changes-check-does-not MODE=protected` exits 0
+>
+> **Checked by** `VERIFY-005` in the [rule
+> catalog](../docs/contract-reference.md)
+
 ## Problem
 
 Every other page in this kit ends by telling you to add a check. Reconcile on a
@@ -364,8 +386,8 @@ retried for real, and the check is evaluated again. The drill is executable
 against the in-memory simulator in both modes.
 
 ```
-python3 -m adapters.in_memory.run_drill state-changes-check-does-not --mode protected
-python3 -m adapters.in_memory.run_drill state-changes-check-does-not --mode unsafe
+python3 src/adapters/in_memory/run_drill.py state-changes-check-does-not --mode protected
+python3 src/adapters/in_memory/run_drill.py state-changes-check-does-not --mode unsafe
 ```
 
 The protected arm reads the destination back and reports `fail` then `pass`

@@ -1,5 +1,26 @@
 # Fan-Out and Fan-In
 
+> **Problem** A join publishes a merged result while one child is still
+> running.
+>
+> **Rule** The join folds durable child records, not whatever the
+> coordinator happened to hold.
+>
+> **Required property** A fan-in completes only when a fresh query over
+> durable child records shows every child terminal, and the merged
+> artifact carries an identity derived from exactly the dispositions it
+> folded, written under a join generation the destination compares
+> atomically with the write.
+>
+> **Wrong** `children I heard from -> merge -> publish`
+>
+> **Right** `query every child record -> all terminal -> merge -> publish under the join generation`
+>
+> **See it fail**
+>
+> - `make drill DRILL=child-completes-after-join MODE=unsafe` exits 2
+> - `make drill DRILL=child-completes-after-join MODE=protected` exits 0
+
 ## Problem
 
 A coordinator splits one intent into several children, dispatches them to run
@@ -243,8 +264,8 @@ after the join has already fired and published. The drill is executable against
 the in-memory simulator in both modes.
 
 ```
-python3 -m adapters.in_memory.run_drill child-completes-after-join --mode protected
-python3 -m adapters.in_memory.run_drill child-completes-after-join --mode unsafe
+python3 src/adapters/in_memory/run_drill.py child-completes-after-join --mode protected
+python3 src/adapters/in_memory/run_drill.py child-completes-after-join --mode unsafe
 ```
 
 The protected arm rejects the straggler's write at the merge slot and

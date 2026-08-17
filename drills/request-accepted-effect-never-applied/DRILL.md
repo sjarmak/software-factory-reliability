@@ -170,8 +170,8 @@ Protected mode exits 0; unsafe mode exits 2. Both write evidence under
 out/evidence/.
 
 ```
-python3 -m adapters.in_memory.run_drill request-accepted-effect-never-applied --mode protected
-python3 -m adapters.in_memory.run_drill request-accepted-effect-never-applied --mode unsafe
+python3 src/adapters/in_memory/run_drill.py request-accepted-effect-never-applied --mode protected
+python3 src/adapters/in_memory/run_drill.py request-accepted-effect-never-applied --mode unsafe
 ```
 
 In the simulator the work item is `w-1`, the request is `req-1`, and the

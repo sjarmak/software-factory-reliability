@@ -1,0 +1,279 @@
+{
+  "authoritative_state": {
+    "check_metadata": {},
+    "checks": {},
+    "claims": {
+      "w-1": {
+        "claim_id": "claim-w-1",
+        "lease": "lease-g1",
+        "session_ids": [
+          "sess-1"
+        ],
+        "work_id": "w-1"
+      }
+    },
+    "effect_ledger": {
+      "eff-1": {
+        "attempt": 2,
+        "receipt": "receipt-2",
+        "status": "acknowledged"
+      }
+    },
+    "requests": {},
+    "resources": {},
+    "sessions": {
+      "sess-1": {
+        "alive": true,
+        "session_id": "sess-1",
+        "work_id": "w-1",
+        "worker_id": "worker-1"
+      }
+    },
+    "views": {},
+    "work_items": {
+      "w-1": {
+        "generation": 1,
+        "lease": "lease-g1",
+        "status": "completed",
+        "work_id": "w-1"
+      }
+    }
+  },
+  "barrier": "effect-committed-ack-pending",
+  "barriers_reached": [
+    "effect-committed-ack-pending",
+    "run-complete"
+  ],
+  "campaign_coverage": {
+    "barriers_reached": [
+      "effect-committed-ack-pending",
+      "run-complete"
+    ],
+    "faults_injected": [
+      {
+        "at_barrier": "effect-committed-ack-pending",
+        "kind": "drop_event"
+      }
+    ],
+    "mode": "unsafe",
+    "run_complete": true,
+    "scenario": "effect-commits-ack-is-lost"
+  },
+  "events": [
+    {
+      "generation": 1,
+      "kind": "work-added",
+      "tick": 1,
+      "work_id": "w-1"
+    },
+    {
+      "kind": "worker-started",
+      "tick": 2,
+      "worker_id": "worker-1"
+    },
+    {
+      "kind": "seeded",
+      "mode": "unsafe",
+      "scenario": "effect-commits-ack-is-lost",
+      "tick": 3
+    },
+    {
+      "kind": "run-started",
+      "mode": "unsafe",
+      "scenario": "effect-commits-ack-is-lost",
+      "tick": 4
+    },
+    {
+      "attempt": 1,
+      "claim_id": "claim-w-1",
+      "generation": 1,
+      "kind": "work-claimed",
+      "lease": "lease-g1",
+      "tick": 5,
+      "work_id": "w-1"
+    },
+    {
+      "attempt": 1,
+      "kind": "session-launched",
+      "session_id": "sess-1",
+      "tick": 6,
+      "work_id": "w-1",
+      "worker_id": "worker-1"
+    },
+    {
+      "attempt": 1,
+      "effect_id": "eff-1",
+      "kind": "effect-applied",
+      "mutation_id": "mut-1",
+      "receipt": "receipt-1",
+      "session_id": "sess-1",
+      "tick": 7,
+      "work_id": "w-1"
+    },
+    {
+      "barrier": "effect-committed-ack-pending",
+      "kind": "barrier-reached",
+      "tick": 8
+    },
+    {
+      "at_barrier": "effect-committed-ack-pending",
+      "fault_kind": "drop_event",
+      "kind": "fault-injected",
+      "tick": 9
+    },
+    {
+      "kind": "drop-armed",
+      "pending_drops": 1,
+      "tick": 10
+    },
+    {
+      "attempt": 1,
+      "effect_id": "eff-1",
+      "kind": "ack-dropped",
+      "tick": 11
+    },
+    {
+      "attempt": 2,
+      "kind": "session-attached",
+      "session_id": "sess-1",
+      "tick": 12,
+      "work_id": "w-1"
+    },
+    {
+      "attempt": 2,
+      "effect_id": "eff-1",
+      "kind": "effect-applied",
+      "mutation_id": "mut-2",
+      "receipt": "receipt-2",
+      "session_id": "sess-1",
+      "tick": 13,
+      "work_id": "w-1"
+    },
+    {
+      "attempt": 2,
+      "effect_id": "eff-1",
+      "kind": "ack-delivered",
+      "tick": 14
+    },
+    {
+      "attempt": 2,
+      "generation": 1,
+      "kind": "outcome-accepted",
+      "session_id": "sess-1",
+      "tick": 15,
+      "work_id": "w-1"
+    },
+    {
+      "barrier": "run-complete",
+      "kind": "barrier-reached",
+      "tick": 16
+    }
+  ],
+  "external_effects": {
+    "artifact": null,
+    "mutations": [
+      {
+        "effect_id": "eff-1",
+        "mutation_id": "mut-1",
+        "payload": "payload-1",
+        "receipt": "receipt-1"
+      },
+      {
+        "effect_id": "eff-1",
+        "mutation_id": "mut-2",
+        "payload": "payload-1",
+        "receipt": "receipt-2"
+      }
+    ],
+    "semantics": "none"
+  },
+  "fault": {
+    "at_barrier": "effect-committed-ack-pending",
+    "kind": "drop_event"
+  },
+  "identities": {
+    "artifact_ids": [],
+    "attempt_ids": [
+      1,
+      2
+    ],
+    "attempt_to_session": {
+      "1": "sess-1",
+      "2": "sess-1"
+    },
+    "check_ids": [],
+    "claim_ids": [
+      "claim-w-1"
+    ],
+    "effect_ids": [
+      "eff-1"
+    ],
+    "generations": [
+      1
+    ],
+    "mutation_ids": [
+      "mut-1",
+      "mut-2"
+    ],
+    "receipt_ids": [
+      "receipt-1",
+      "receipt-2"
+    ],
+    "request_ids": [],
+    "resource_ids": [],
+    "session_ids": [
+      "sess-1"
+    ],
+    "view_ids": [],
+    "work_ids": [
+      "w-1"
+    ],
+    "worker_ids": [
+      "worker-1"
+    ]
+  },
+  "mode": "unsafe",
+  "oracle": {
+    "description": "The acknowledgement was dropped, a second attempt re-sent the effect identity, and the destination holds exactly one mutation for it.",
+    "detail": {
+      "drop_tick": 11,
+      "mutations": [
+        {
+          "effect_id": "eff-1",
+          "mutation_id": "mut-1",
+          "payload": "payload-1",
+          "receipt": "receipt-1"
+        },
+        {
+          "effect_id": "eff-1",
+          "mutation_id": "mut-2",
+          "payload": "payload-1",
+          "receipt": "receipt-2"
+        }
+      ],
+      "retry_tick": 13
+    },
+    "expected": 1,
+    "name": "one-mutation-per-effect-identity",
+    "observed": 2,
+    "verdict": "violation"
+  },
+  "running_executors": {
+    "sessions": [
+      {
+        "session_id": "sess-1",
+        "work_id": "w-1",
+        "worker_id": "worker-1"
+      }
+    ],
+    "workers": [
+      {
+        "session_ids": [
+          "sess-1"
+        ],
+        "worker_id": "worker-1"
+      }
+    ]
+  },
+  "scenario": "effect-commits-ack-is-lost"
+}

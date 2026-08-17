@@ -1,5 +1,24 @@
 # Repairable Preconditions
 
+> **Problem** A guard refuses a run over a condition the run itself knows
+> how to fix.
+>
+> **Rule** Refuse only what you cannot repair.
+>
+> **Required property** When an operation holds a repair step for the
+> precondition it enforces, that step runs before the check and the check
+> verifies the repair's result; every refusal then names a condition no
+> code path in the operation could have cleared.
+>
+> **Wrong** `state has drifted -> refuse -> wait for an operator`
+>
+> **Right** `state has drifted -> run the repair -> the check verifies the repaired state`
+>
+> **See it fail**
+>
+> - `make drill DRILL=guard-refuses-repair-never-runs MODE=unsafe` exits 2
+> - `make drill DRILL=guard-refuses-repair-never-runs MODE=protected` exits 0
+
 ## Problem
 
 An operation needs a resource to be in a particular state before it acts, so
@@ -227,8 +246,8 @@ of the state that write requires, and the same write is attempted twice more.
 The drill is executable against the in-memory simulator in both modes.
 
 ```
-python3 -m adapters.in_memory.run_drill guard-refuses-repair-never-runs --mode protected
-python3 -m adapters.in_memory.run_drill guard-refuses-repair-never-runs --mode unsafe
+python3 src/adapters/in_memory/run_drill.py guard-refuses-repair-never-runs --mode protected
+python3 src/adapters/in_memory/run_drill.py guard-refuses-repair-never-runs --mode unsafe
 ```
 
 Both arms hold the same precondition check and the same repair, and they

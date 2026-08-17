@@ -10,7 +10,7 @@ from pathlib import Path
 
 _SPEC = importlib.util.spec_from_file_location(
     "prose_check",
-    Path(__file__).resolve().parent.parent / "scripts" / "prose-check.py",
+    Path(__file__).resolve().parent.parent / "src" / "checks" / "prose_check.py",
 )
 prose_check = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(prose_check)

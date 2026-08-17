@@ -1,5 +1,26 @@
 # Fenced Authority
 
+> **Problem** A worker that has lost its claim keeps writing.
+>
+> **Rule** Ownership is not authority.
+>
+> **Required property** At most one generation is current for one logical
+> operation, and no destination applies a write presented under a
+> non-current generation. Validating the generation and applying the write
+> are one atomic step at the destination.
+>
+> **Wrong** `check the lease -> write`
+>
+> **Right** `write(gen=7) -> destination compares 7 against current -> reject`
+>
+> **See it fail**
+>
+> - `make drill DRILL=stale-writer-completes MODE=unsafe` exits 2
+> - `make drill DRILL=stale-writer-completes MODE=protected` exits 0
+>
+> **Checked by** `AUTH-000`, `AUTH-001`, `AUTH-002` in the [rule
+> catalog](../docs/contract-reference.md)
+
 ## Problem
 
 Two executors can simultaneously believe they own the same work. A retry

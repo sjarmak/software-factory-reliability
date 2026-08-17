@@ -1,5 +1,27 @@
 # Cross-Repo Campaigns
 
+> **Problem** A campaign reports complete while repositories that still
+> need the change sit untouched.
+>
+> **Rule** A campaign is complete when discovery finds nothing left, not
+> when the children finish.
+>
+> **Required property** Completion is recomputed by a fresh discovery pass
+> over current repository state, and every target found carries published,
+> exempted, or blocked with a named owner.
+>
+> **Wrong** `all child tasks done -> campaign complete`
+>
+> **Right** `rediscover targets -> every target carries a disposition -> campaign complete`
+>
+> **See it fail**
+>
+> - [`drills/campaign-coverage-drifts/`](../drills/campaign-coverage-drifts/), a specification with no executable arm yet
+> - [`drills/repository-base-moves/`](../drills/repository-base-moves/), a specification with no executable arm yet
+>
+> **Checked by** `CAMP-001`, `CODE-000` in the [rule
+> catalog](../docs/contract-reference.md)
+
 ## Problem
 
 Some intents span repositories: migrate every caller of a changed API, rotate
@@ -26,7 +48,7 @@ Related pages: each child's dispatch is subject to
 stall modes are detected by
 [promise-oriented-observability](promise-oriented-observability.md). The
 report format for the join is specified in
-[campaign-coverage](../observability/campaign-coverage.md).
+[campaign-coverage](../docs/observability/campaign-coverage.md).
 
 ## Observed failure
 
@@ -256,5 +278,5 @@ holding the fact), this time at the join.
 - Book manuscript ch08 and ch12,
   ercabook2026:chapters/
 - Worked coverage example:
-  [campaign-coverage](../observability/campaign-coverage.md) against the
-  fixtures/multi-repo-api-migration fixture.
+  [campaign-coverage](../docs/observability/campaign-coverage.md) against the
+  examples/fixtures/multi-repo-api-migration fixture.

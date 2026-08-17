@@ -1,5 +1,26 @@
 # Verify Before Publish
 
+> **Problem** The artifact that ships is not the artifact that was tested.
+>
+> **Rule** The verdict binds to an immutable artifact identity, never to a
+> mutable reference.
+>
+> **Required property** An artifact stays a candidate until an independent
+> mechanism establishes the postcondition, and publication rechecks at
+> publish time that the artifact being published is identical to the one
+> verified, or the verdict is void and verification reruns.
+>
+> **Wrong** `verify the branch -> publish the branch`
+>
+> **Right** `verify commit abc123 -> publish confirms the reference still resolves to abc123 -> publish`
+>
+> **See it fail**
+>
+> - [`drills/artifact-changes-after-verification/`](../drills/artifact-changes-after-verification/), a specification with no executable arm yet
+>
+> **Checked by** `VERIFY-001`, `VERIFY-002`, `VERIFY-003`, `VERIFY-004` in
+> the [rule catalog](../docs/contract-reference.md)
+
 ## Problem
 
 A worker's completion report is testimony. It is produced from the same

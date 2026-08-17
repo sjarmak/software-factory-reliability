@@ -1,5 +1,27 @@
 # Durable Intent
 
+> **Problem** A worker dies between committing an external effect and
+> recording that it happened.
+>
+> **Rule** Write down what you are about to do before you do it.
+>
+> **Required property** No irreversible external attempt begins without a
+> durable intent record naming work_id, generation, effect_id, and
+> destination, and at recovery every intent record yields a returned
+> result, a converged state, or an explicit unknown-state escalation.
+>
+> **Wrong** `call the destination -> record the result`
+>
+> **Right** `record the intent -> call the destination -> record the result -> recovery reads the intent`
+>
+> **See it fail**
+>
+> - `make drill DRILL=effect-commits-ack-is-lost MODE=unsafe` exits 2
+> - `make drill DRILL=effect-commits-ack-is-lost MODE=protected` exits 0
+>
+> **Checked by** `EFFECT-004` in the [rule
+> catalog](../docs/contract-reference.md)
+
 ## Problem
 
 Crossing an external boundary (merge, push, pull-request creation, message

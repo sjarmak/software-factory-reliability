@@ -1,5 +1,28 @@
 # Topology-Aware Scheduling
 
+> **Problem** Two agents edit code that interacts, and the collision
+> surfaces at merge.
+>
+> **Rule** The scheduler has to read the code, not only the queue.
+>
+> **Required property** No two jobs whose effect sets can interact run
+> concurrently unless a conflict answer computed against the repository
+> state the workers will actually edit asserts they are independent, and
+> an answer computed against a different revision than the dispatch target
+> is no answer at all.
+>
+> **Wrong** `queue depth allows it -> dispatch both`
+>
+> **Right** `compute conflicts at repository@revision -> the revision matches the dispatch target -> dispatch`
+>
+> **See it fail**
+>
+> - [`drills/repository-base-moves/`](../drills/repository-base-moves/), a specification with no executable arm yet
+> - [`drills/retry-storm/`](../drills/retry-storm/), a specification with no executable arm yet
+>
+> **Checked by** `FLEET-001`, `FLEET-002`, `FLEET-003` in the [rule
+> catalog](../docs/contract-reference.md)
+
 ## Problem
 
 A capacity-only scheduler answers one question: is a slot free. A software

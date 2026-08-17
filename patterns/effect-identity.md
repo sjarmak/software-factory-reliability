@@ -1,5 +1,26 @@
 # Effect Identity
 
+> **Problem** A retry applies the same external mutation a second time.
+>
+> **Rule** Attempts are unbounded; physical effects per identity are one.
+>
+> **Required property** Every attempt of one logical effect crosses the
+> boundary carrying the same effect identity, and the destination uses
+> that identity inside its own atomicity domain to deduplicate, converge,
+> or expose state a reconciler can query.
+>
+> **Wrong** `retry -> fresh request id -> destination sees a new request`
+>
+> **Right** `retry -> same effect_id -> destination returns the stored receipt`
+>
+> **See it fail**
+>
+> - `make drill DRILL=effect-commits-ack-is-lost MODE=unsafe` exits 2
+> - `make drill DRILL=effect-commits-ack-is-lost MODE=protected` exits 0
+>
+> **Checked by** `EFFECT-000`, `EFFECT-001`, `EFFECT-002`, `IDENT-002` in
+> the [rule catalog](../docs/contract-reference.md)
+
 ## Problem
 
 An orchestrator that redelivers work after a crash is behaving correctly.

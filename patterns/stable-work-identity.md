@@ -1,5 +1,26 @@
 # Stable Work Identity
 
+> **Problem** A retry forks the work instead of converging on it.
+>
+> **Rule** One logical operation, one work_id, for life.
+>
+> **Required property** A retry may create a new attempt_id under the same
+> work_id and must never create a second work_id. Every durable record
+> joins back to the work_id, and observational identifiers (PID, vendor
+> session id, engine attempt number) stay diagnostics, never join keys.
+>
+> **Wrong** `retry -> new work record keyed on the attempt`
+>
+> **Right** `retry -> new attempt_id under the same work_id -> every record joins on work_id`
+>
+> **See it fail**
+>
+> - `make drill DRILL=worker-dies-agent-survives MODE=unsafe` exits 2
+> - `make drill DRILL=worker-dies-agent-survives MODE=protected` exits 0
+>
+> **Checked by** `IDENT-001` in the [rule
+> catalog](../docs/contract-reference.md)
+
 ## Problem
 
 A software factory runs nondeterministic executors against durable work, and

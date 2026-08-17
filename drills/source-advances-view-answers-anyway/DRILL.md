@@ -173,8 +173,8 @@ Protected mode exits 0; unsafe mode exits 2. Both write evidence under
 out/evidence/.
 
 ```
-python3 -m adapters.in_memory.run_drill source-advances-view-answers-anyway --mode protected
-python3 -m adapters.in_memory.run_drill source-advances-view-answers-anyway --mode unsafe
+python3 src/adapters/in_memory/run_drill.py source-advances-view-answers-anyway --mode protected
+python3 src/adapters/in_memory/run_drill.py source-advances-view-answers-anyway --mode unsafe
 ```
 
 In the simulator the work item is `w-1`, the view is `view-1` with a declared

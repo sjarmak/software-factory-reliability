@@ -1,5 +1,26 @@
 # Promise-Oriented Observability
 
+> **Problem** Nothing is erroring and no work is moving.
+>
+> **Rule** Alert on the promise that was not kept, not on the component
+> that did not complain.
+>
+> **Required property** Every promise in the lifecycle has a written bound
+> to its confirming event, and the absence of that event past the bound is
+> itself a first-class alertable observation, derived by querying the
+> durable record rather than by trusting a component's self-report.
+>
+> **Wrong** `every component reports healthy -> page nobody`
+>
+> **Right** `claimed at T, no started event by T plus the bound -> page on the broken promise`
+>
+> **See it fail**
+>
+> - [`drills/retry-storm/`](../drills/retry-storm/), a specification with no executable arm yet
+>
+> **Checked by** `OBS-001` in the [rule
+> catalog](../docs/contract-reference.md)
+
 ## Problem
 
 Conventional monitoring watches processes and resources: is the service up,
@@ -21,9 +42,9 @@ recovery backlogs drain. Monitoring that cannot see a broken promise is
 monitoring the wrong object.
 
 Related pages: the event vocabulary these promises are measured in is
-[semantic-conventions](../observability/semantic-conventions.md); the stage
+[semantic-conventions](../docs/observability/semantic-conventions.md); the stage
 latencies and alert conditions are
-[promise-latencies](../observability/promise-latencies.md); campaigns add a
+[promise-latencies](../docs/observability/promise-latencies.md); campaigns add a
 coverage promise described in
 [cross-repo-campaigns](cross-repo-campaigns.md).
 
@@ -60,7 +81,7 @@ memory.
 ## Mechanism
 
 The lifecycle is instrumented as events against durable identities
-(see [semantic-conventions](../observability/semantic-conventions.md)). Each
+(see [semantic-conventions](../docs/observability/semantic-conventions.md)). Each
 promise is a pair of events and a bound:
 
 ```
@@ -98,7 +119,7 @@ turns a provider outage into a second outage on the way back up, so recovery
 is admitted from a separate budget (a starting split of roughly 70 percent
 current work, 30 percent recovery) and the observable promise is that the
 backlog shrinks while the interactive reserve stays intact. The matching
-query is in [sample-queries](../observability/sample-queries.sql).
+query is in [sample-queries](../docs/observability/sample-queries.sql).
 
 ## Where enforcement occurs
 
@@ -190,7 +211,7 @@ The promise bounds themselves are policy, and our sources give little help
 choosing them: the observed systems either had no bounds (the 10-day dormant
 order) or bounds gated on the wrong variable (the 4G MemAvailable gate). The
 suggested starting values in
-[promise-latencies](../observability/promise-latencies.md) are stated as
+[promise-latencies](../docs/observability/promise-latencies.md) are stated as
 tunable defaults, not measured optima.
 
 Watching outcome instead of liveness costs queries against the store on
