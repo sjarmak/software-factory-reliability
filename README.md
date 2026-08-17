@@ -64,8 +64,8 @@ show evidence for is a guess.
 | `schemas/` | JSON Schemas for factory contracts, campaigns, guarantees, and work manifests |
 | `cmd/factory-check/` | Python CLI: `init`, `validate`, `review`, `render` |
 | `examples/` | A minimal factory, an issue-to-PR pipeline, a long-running agent, a cross-repo migration, and a deliberately unsafe contract |
-| `patterns/` | Twelve pattern pages, one per recurring failure boundary |
-| `drills/` | Nine fault-drill specifications; five are executable against the simulator |
+| `patterns/` | Thirteen pattern pages, one per recurring failure boundary |
+| `drills/` | Ten fault-drill specifications; six are executable against the simulator |
 | `adapters/` | The adapter protocol and an in-memory simulator that runs drills |
 | `recipes/` | Five worked recipes: four factory shapes, plus a recovery path |
 | `fixtures/` | Multi-repo and single-repo fixtures used by drills and tests |

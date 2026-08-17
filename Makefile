@@ -1,8 +1,8 @@
 PY ?= python3
 
-# The five executable drills, run in protected mode. Names must match the
+# The six executable drills, run in protected mode. Names must match the
 # DRILLS registry in adapters/in_memory/run_drill.py.
-DRILLS ?= worker-dies-agent-survives stale-writer-completes effect-commits-ack-is-lost event-is-lost child-completes-after-join
+DRILLS ?= worker-dies-agent-survives stale-writer-completes effect-commits-ack-is-lost event-is-lost child-completes-after-join request-accepted-effect-never-applied
 
 .PHONY: test schema-check prose-check drills check
 

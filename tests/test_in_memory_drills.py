@@ -1,7 +1,7 @@
-"""Pytest coverage for the five in-memory drills in both modes.
+"""Pytest coverage for the six in-memory drills in both modes.
 
 Each drill-mode pair is run through the callable API (run_drill) for
-speed; exit codes and evidence-file invariants are asserted for all ten
+speed; exit codes and evidence-file invariants are asserted for all twelve
 combinations, plus determinism and protocol-validation checks.
 """
 
@@ -31,6 +31,7 @@ EXPECTED_BARRIER = {
     "effect-commits-ack-is-lost": "effect-committed-ack-pending",
     "event-is-lost": "before-ledger-event",
     "child-completes-after-join": "before-join",
+    "request-accepted-effect-never-applied": "request-accepted",
 }
 # Full fault records: a targeted fault carries the target it was aimed at, so
 # the evidence names which lease expired rather than leaving it to the log.
@@ -40,6 +41,7 @@ EXPECTED_FAULT = {
     "effect-commits-ack-is-lost": {"kind": "drop_event"},
     "event-is-lost": {"kind": "drop_event"},
     "child-completes-after-join": {"kind": "expire_lease", "target": "c-3"},
+    "request-accepted-effect-never-applied": {"kind": "drop_event"},
 }
 # Work items each scenario seeds, in identity_snapshot order (sorted).
 EXPECTED_WORK_IDS = {
@@ -48,6 +50,7 @@ EXPECTED_WORK_IDS = {
     "effect-commits-ack-is-lost": ["w-1"],
     "event-is-lost": ["w-1"],
     "child-completes-after-join": ["c-1", "c-2", "c-3", "w-1"],
+    "request-accepted-effect-never-applied": ["w-1"],
 }
 COMBOS = [(drill, mode) for drill in sorted(DRILLS) for mode in MODES]
 
@@ -243,6 +246,103 @@ def test_dispositions_are_derived_from_child_evidence():
     assert f.derive_dispositions(["c-3"]) == {"c-3": "undispositioned"}
 
 
+@pytest.mark.parametrize("mode,expected_outcome,expected_basis", [
+    ("protected", "requested-and-queued", "destination-readback"),
+    ("unsafe", "requested-and-applied", "own-dispatch-result"),
+])
+def test_request_outcome_reports_the_destination(tmp_path, mode,
+                                                 expected_outcome,
+                                                 expected_basis):
+    """The destination is empty in both arms; only the protected boundary
+    says so. The basis field records which source the outcome came from, so
+    a correct-looking outcome computed the wrong way is still visible."""
+    _code, ev = _run(tmp_path, "request-accepted-effect-never-applied", mode)
+    assert ev["external_effects"]["mutations"] == []
+    kinds = [e["kind"] for e in ev["events"]]
+    assert "apply-effect-dropped" in kinds
+    assert "effect-applied" not in kinds
+    classified = [e for e in ev["events"]
+                  if e["kind"] == "outcome-classified"]
+    assert len(classified) == 1
+    assert classified[0]["basis"] == expected_basis
+    request = ev["authoritative_state"]["requests"]["req-1"]
+    assert request["outcome"] == expected_outcome
+    assert request["requested_effects"] == ["eff-1"]
+
+
+@pytest.mark.parametrize("mode,expected_terminal", [
+    ("protected", {"state": "expired",
+                   "reason": "accepted request still unapplied when the "
+                             "window closed"}),
+    ("unsafe", None),
+])
+def test_accepted_request_holds_a_terminal_record(tmp_path, mode,
+                                                  expected_terminal):
+    """A returned outcome is a value the caller may discard. The terminal
+    record is the durable half, and the unsafe arm has none: this asserts it
+    separately from the outcome's truthfulness so neither check can carry
+    the other."""
+    _code, ev = _run(tmp_path, "request-accepted-effect-never-applied", mode)
+    request = ev["authoritative_state"]["requests"]["req-1"]
+    assert request["terminal"] == expected_terminal
+    kinds = [e["kind"] for e in ev["events"]]
+    assert ("request-terminal" in kinds) == (mode == "protected")
+    assert ("request-sweep-absent" in kinds) == (mode == "unsafe")
+    assert ev["oracle"]["detail"]["recorded"] is (mode == "protected")
+
+
+def test_classify_by_readback_names_each_outcome():
+    """All six outcomes are reachable from the same classifier. The drill
+    drives two of them; the rest are pinned here, including the documented
+    call on a reported failure that left nothing at the destination."""
+    from adapters.in_memory.model import Factory
+    f = Factory("dedup", "fenced", True)
+    f.add_work("w-1", generation=1)
+    f.start_worker("worker-1")
+    f.claim_work("w-1", attempt=1)
+    f.launch_session("w-1", "worker-1", attempt=1)
+
+    f.reject_request("req-reject", "w-1", ["eff-a"], "unknown recipe")
+    assert f.classify_by_readback("req-reject") == "rejected-before-mutation"
+
+    f.accept_request("req-queued", "w-1", ["eff-a"])
+    assert f.classify_by_readback("req-queued") == "requested-and-queued"
+
+    f.apply_effect("w-1", "sess-1", "eff-a", "payload-a", attempt=1)
+    assert f.classify_by_readback("req-queued") == "requested-and-applied"
+
+    f.accept_request("req-partial", "w-1", ["eff-a", "eff-b"])
+    assert f.classify_by_readback("req-partial") == "partially-applied"
+    # The same split set, once the application leg reports an error: the
+    # caller may no longer retry the whole request unchanged.
+    f.requests["req-partial"].failed = True
+    assert f.classify_by_readback("req-partial") == "failed-after-mutation"
+
+    # A reported failure with nothing at the destination is still an
+    # accepted request owing a terminal record, not a failed mutation.
+    f.accept_request("req-clean-failure", "w-1", ["eff-c"])
+    f.requests["req-clean-failure"].failed = True
+    assert f.classify_by_readback("req-clean-failure") == "requested-and-queued"
+
+    f.accept_request("req-blind", "w-1", ["eff-d"])
+    f.requests["req-blind"].observation_ok = False
+    assert (f.classify_by_readback("req-blind")
+            == "unknown-because-observation-failed")
+
+
+def test_dispatch_classification_ignores_the_destination():
+    """The unsafe path's defect in isolation: the same empty destination
+    that makes the readback say queued makes the dispatch path say applied,
+    because it never looks."""
+    from adapters.in_memory.model import Factory
+    f = Factory("dedup", "fenced", True)
+    f.add_work("w-1", generation=1)
+    f.accept_request("req-1", "w-1", ["eff-1"])
+    assert f.destination.mutations == []
+    assert f.classify_by_dispatch("req-1") == "requested-and-applied"
+    assert f.classify_by_readback("req-1") == "requested-and-queued"
+
+
 @pytest.mark.parametrize("drill,mode", COMBOS)
 def test_determinism(tmp_path, drill, mode):
     dir_a = tmp_path / "a"
@@ -337,7 +437,8 @@ def test_oracles_error_on_vacuous_evidence():
     the dangerous operation; the original oracles did."""
     from adapters.in_memory.run_drill import (
         _oracle_worker_dies, _oracle_stale_writer, _oracle_effect_ack,
-        _oracle_event_lost, _oracle_child_after_join)
+        _oracle_event_lost, _oracle_child_after_join,
+        _oracle_request_never_applied)
     vacuous = {
         "events": [],
         "authoritative_state": {
@@ -350,7 +451,7 @@ def test_oracles_error_on_vacuous_evidence():
     }
     for oracle in (_oracle_worker_dies, _oracle_stale_writer,
                    _oracle_effect_ack, _oracle_event_lost,
-                   _oracle_child_after_join):
+                   _oracle_child_after_join, _oracle_request_never_applied):
         verdict = oracle(vacuous)["verdict"]
         assert verdict == "error", f"{oracle.__name__} returned {verdict}"
 

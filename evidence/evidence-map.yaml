@@ -12,7 +12,7 @@
 # An inference entry is a design bet, never an established result.
 
 version: 1
-updated: "2026-08-16"
+updated: "2026-08-17"
 
 patterns:
   stable-work-identity:
@@ -323,3 +323,106 @@ patterns:
         outage than the first.
       basis: local-observation
       source: ercabook2026:chapters/ch09
+
+  postcondition-typed-outcomes:
+    - claim: >-
+        A remote invocation's outcome must be partitioned into refused
+        before mutation, failed after mutation, and indeterminate; without
+        that partition a caller cannot decide whether a retry is safe.
+      basis: foundational
+      source: "Waldo et al. 1994, A Note on Distributed Computing; Kleppmann 2017, ch. 8"
+    - claim: >-
+        A safe retry needs a request identifier the destination recognizes,
+        so the retry of an outcome that reported failure after mutation is
+        deduplicated rather than reapplied.
+      basis: foundational
+      source: "Joshi 2023, Patterns of Distributed Systems (idempotent receiver, request identifiers)"
+    - claim: >-
+        The highest-cost failure class is a command that succeeds
+        syntactically while only part of the requested operation happened,
+        and the recommended remedy is a typed outcome carrying enough
+        postcondition state to distinguish requested-and-applied,
+        requested-and-queued, partially-applied, rejected-before-mutation,
+        failed-after-mutation, and unknown-because-the-observation-failed.
+      basis: local-observation
+      source: gascity2026:.gc-reports/gc-tooling-ergonomics-2026-08-17.md
+    - claim: >-
+        One dispatch command writes routing state and fails to wake the
+        worker, attaches a formula to the wrong object under a
+        success-shaped message, degrades an unknown formula into a plain
+        route, and returns an idempotent no-op that reads like a fresh
+        dispatch, all under one line and one exit status.
+      basis: local-observation
+      source: gascity2026:.gc-reports/gc-tooling-ergonomics-2026-08-17.md
+    - claim: >-
+        Message creation is reported as success while notification is
+        opt-in, so the success line does not mean any recipient was
+        reached.
+      basis: local-observation
+      source: gascity2026:.gc-reports/gc-tooling-ergonomics-2026-08-17.md
+    - claim: >-
+        Transient read failures returned no-issue-found for valid records
+        and then succeeded on immediate retry, so absence and uncertainty
+        are indistinguishable at that boundary and a false empty read
+        invites duplicate routing.
+      basis: local-observation
+      source: gascity2026:.gc-reports/gc-tooling-ergonomics-2026-08-17.md
+    - claim: >-
+        A dispatch wrapper reported success and delivered nothing three
+        times in one session while a different dispatch command reported
+        failure and delivered correctly, so the outcome was wrong in both
+        directions on the same day.
+      basis: local-observation
+      source: gascity2026:CLAUDE.md
+    - claim: >-
+        One queued nudge was delivered 3/3 and recorded 0/3, and the queue
+        re-sent it roughly every ten minutes for 24 hours carrying work
+        direction the recipient had already completed; no cancel verb
+        exists, so stopping it meant editing queue state by hand.
+      basis: local-observation
+      source: gascity2026:docs/conventions/bead-dispatch.md
+    - claim: >-
+        67 undelivered dispatches accumulated between 2026-06-12 and
+        2026-08-12, all of them work direction, read by nothing.
+      basis: local-observation
+      source: gascity2026:CLAUDE.md
+    - claim: >-
+        That figure is confirmed at its own date by the order written for
+        it, and the backlog was later pruned rather than triaged: a
+        one-hour dead retention under a six-hourly reporter whose output is
+        a destructive overwrite leaves a blind window of up to five hours
+        in which no per-entry record survives.
+      basis: local-observation
+      source: gascity2026:.gc-reports/factory-contract-audit-2026-08-16/drills-3-4-effects-reconciliation.md
+    - claim: >-
+        Queued intent is bound to the session generation rather than to the
+        logical work item, so a rolled session discards the intent instead
+        of re-targeting it even though the work identifier is present in
+        the record, and the alerting contract on that path terminates in a
+        log line with no mail, bead, or message.
+      basis: local-observation
+      source: gascity2026:.gc-reports/factory-contract-audit-2026-08-16/drills-3-4-effects-reconciliation.md
+    - claim: >-
+        A delivery result type carries an explicit undelivered reason with
+        two named values, and the calling path never reads it, so three
+        distinguishable outcomes collapse into one boolean at the command
+        surface.
+      basis: local-observation
+      source: gascity2026:.gc-reports/factory-contract-audit-2026-08-16/drills-3-4-effects-reconciliation.md
+    - claim: >-
+        A statement wrapper of the form -q "USE db; stmt" exits zero on a
+        refused statement, verified 2026-08-09 by reading the table rather
+        than the exit status, so for that boundary the exit line is not a
+        weak postcondition claim but no claim at all.
+      basis: local-observation
+      source: gascity2026:docs/adr/0021-idempotent-convergence-and-fenced-publication.md
+    - claim: >-
+        The six outcomes as a boundary's complete return type, classified
+        by reading the destination back rather than from the boundary's own
+        outbound call, with the claim binding in both directions and every
+        accepted request owing a durable terminal record. The six states
+        are recommended in the source report and each failure shape is
+        observed; this composition executes only against the in-memory
+        simulator.
+      basis: inference
+      source: "this kit's postcondition-typed-outcomes pattern and the request-accepted-effect-never-applied drill"

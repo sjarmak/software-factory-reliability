@@ -11,6 +11,11 @@ Three layers that real factories often conflate are kept separate here:
   destination  external ground truth (mutations, the published artifact)
   delivery     the event bus between them, which can drop events
 
+A fourth concern crosses all three: the command boundary a caller talks to,
+which returns an outcome for a request. Its two classification paths
+(classify_by_readback and classify_by_dispatch) are the difference between
+reporting the destination and reporting one's own dispatch.
+
 Basis note: the layer split mirrors the guarantee split observed in the
 Temporal experiment series (local observation,
 temporallab2026:docs/guarantees.md): completion cardinality at the
@@ -74,6 +79,39 @@ class Mutation:
     effect_id: str
     payload: str
     receipt: str
+
+
+@dataclass
+class Request:
+    """One request as it crosses a command boundary.
+
+    requested_effects is what the caller asked to be durably present.
+    accepted records that the boundary durably took the request on; failed
+    records that the application leg reported an error after acceptance;
+    observation_ok records whether the boundary could read the destination
+    back at classification time. outcome and terminal are what the boundary
+    returned synchronously and what it later recorded, which are two
+    different things and are stored separately for that reason.
+    """
+
+    request_id: str
+    work_id: str
+    requested_effects: list[str]
+    accepted: bool = False
+    failed: bool = False
+    observation_ok: bool = True
+    outcome: str | None = None
+    terminal: dict | None = None
+
+
+# Outcomes that describe a settled request. The other three
+# (requested-and-queued, partially-applied,
+# unknown-because-observation-failed) leave work owed to the caller.
+TERMINAL_OUTCOMES = (
+    "requested-and-applied",
+    "rejected-before-mutation",
+    "failed-after-mutation",
+)
 
 
 class Destination:
@@ -151,6 +189,7 @@ class Factory:
         self.sessions: dict[str, Session] = {}
         self.workers: dict[str, Worker] = {}
         self.effect_ledger: dict[str, dict] = {}
+        self.requests: dict[str, Request] = {}
         self.attempt_sessions: dict[int, str] = {}
         self.bus = EventBus()
         self.destination = Destination(destination_semantics)
@@ -160,6 +199,7 @@ class Factory:
         self.attempt_ids: list[int] = []
         self.effect_ids: list[str] = []
         self.artifact_ids: list[str] = []
+        self.request_ids: list[str] = []
         self.generations_seen: list[int] = []
 
     def log(self, event_kind: str, /, **detail) -> None:
@@ -271,6 +311,104 @@ class Factory:
         self.log("outcome-accepted", work_id=work_id, session_id=session_id,
                  attempt=attempt, generation=presented)
         return True
+
+    # command boundary
+
+    def accept_request(self, request_id: str, work_id: str,
+                       effect_ids: list[str]) -> Request:
+        """Durably accept a request at the boundary.
+
+        Acceptance is a record that the request exists and what it asked
+        for. It is deliberately not a claim that anything reached the
+        destination, which is the distinction the classification below is
+        built to preserve.
+        """
+        request = Request(request_id=request_id, work_id=work_id,
+                          requested_effects=list(effect_ids), accepted=True)
+        self.requests[request_id] = request
+        self._note(self.request_ids, request_id)
+        self.log("request-accepted", request_id=request_id, work_id=work_id,
+                 requested_effects=list(effect_ids))
+        return request
+
+    def reject_request(self, request_id: str, work_id: str,
+                       effect_ids: list[str], reason: str) -> Request:
+        """Refuse a request before any mutation reaches the destination.
+
+        The record exists so the refusal is classifiable and countable; the
+        boundary is entitled to rejected-before-mutation only because the
+        refusal happened here, ahead of the application leg.
+        """
+        request = Request(request_id=request_id, work_id=work_id,
+                          requested_effects=list(effect_ids), accepted=False)
+        self.requests[request_id] = request
+        self._note(self.request_ids, request_id)
+        self.log("request-rejected", request_id=request_id, work_id=work_id,
+                 requested_effects=list(effect_ids), reason=reason)
+        return request
+
+    def classify_by_readback(self, request_id: str) -> str:
+        """Classify the request's postcondition by reading the destination.
+
+        Six outcomes, in the order the boundary can rule them out. A
+        refusal that never reached the destination is the only one that
+        licenses an unchanged retry; a failed observation is a legitimate
+        answer rather than a defect, and is returned in preference to a
+        guess.
+        """
+        request = self.requests[request_id]
+        applied = {m.effect_id for m in self.destination.mutations}
+        landed = [e for e in request.requested_effects if e in applied]
+        absent = [e for e in request.requested_effects if e not in applied]
+        if not request.accepted:
+            outcome = "rejected-before-mutation"
+        elif not request.observation_ok:
+            outcome = "unknown-because-observation-failed"
+        elif not absent:
+            outcome = "requested-and-applied"
+        elif request.failed:
+            # A reported failure that left part of the set at the
+            # destination is not retryable unchanged. A reported failure
+            # that left nothing there is still an accepted request owing a
+            # terminal record, which is what queued means here.
+            outcome = "failed-after-mutation" if landed else "requested-and-queued"
+        elif landed:
+            outcome = "partially-applied"
+        else:
+            outcome = "requested-and-queued"
+        request.outcome = outcome
+        self.log("outcome-classified", request_id=request_id, outcome=outcome,
+                 basis="destination-readback", landed=landed, absent=absent)
+        return outcome
+
+    def classify_by_dispatch(self, request_id: str) -> str:
+        """Classify from the boundary's own outbound call (the unsafe path).
+
+        The boundary accepted the request, so it reports success. Nothing
+        here reads the destination, which is why the returned outcome can
+        be success-shaped over an empty destination.
+        """
+        request = self.requests[request_id]
+        outcome = ("requested-and-applied" if request.accepted
+                   else "rejected-before-mutation")
+        request.outcome = outcome
+        self.log("outcome-classified", request_id=request_id, outcome=outcome,
+                 basis="own-dispatch-result")
+        return outcome
+
+    def record_request_terminal(self, request_id: str, state: str,
+                                reason: str) -> dict:
+        """Write the durable terminal record a returned outcome owes.
+
+        The synchronous outcome is a return value the caller may have
+        discarded; this is the record a later scan can find.
+        """
+        request = self.requests[request_id]
+        record = {"state": state, "reason": reason}
+        request.terminal = record
+        self.log("request-terminal", request_id=request_id, state=state,
+                 reason=reason)
+        return record
 
     # destination operations
 
@@ -419,6 +557,13 @@ class Factory:
                 for sid, s in self.sessions.items()
             },
             "effect_ledger": {k: dict(v) for k, v in self.effect_ledger.items()},
+            "requests": {
+                rid: {"request_id": r.request_id, "work_id": r.work_id,
+                      "requested_effects": list(r.requested_effects),
+                      "accepted": r.accepted, "outcome": r.outcome,
+                      "terminal": dict(r.terminal) if r.terminal else None}
+                for rid, r in self.requests.items()
+            },
         }
 
     def effects_snapshot(self) -> dict:
@@ -456,6 +601,7 @@ class Factory:
             "claim_ids": sorted(c.claim_id for c in self.claims.values()),
             "effect_ids": list(self.effect_ids),
             "artifact_ids": list(self.artifact_ids),
+            "request_ids": list(self.request_ids),
             "mutation_ids": [m.mutation_id for m in self.destination.mutations],
             "receipt_ids": [m.receipt for m in self.destination.mutations],
             "attempt_to_session": {

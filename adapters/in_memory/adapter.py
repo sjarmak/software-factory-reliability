@@ -19,7 +19,7 @@ from pathlib import Path
 
 import jsonschema
 
-from adapters.in_memory.model import Factory
+from adapters.in_memory.model import TERMINAL_OUTCOMES, Factory
 
 _SCHEMA_PATH = Path(__file__).resolve().parents[1] / "protocol.schema.json"
 _SCHEMA = json.loads(_SCHEMA_PATH.read_text())
@@ -29,6 +29,7 @@ _COMMAND_VALIDATOR = jsonschema.Draft202012Validator(
 
 WORK_ID = "w-1"
 EFFECT_ID = "eff-1"
+REQUEST_ID = "req-1"
 CHILD_IDS = ("c-1", "c-2", "c-3")
 STRAGGLER_ID = "c-3"
 MODES = ("protected", "unsafe")
@@ -38,6 +39,7 @@ SCENARIOS = (
     "effect-commits-ack-is-lost",
     "event-is-lost",
     "child-completes-after-join",
+    "request-accepted-effect-never-applied",
 )
 
 
@@ -296,12 +298,66 @@ def _script_child_after_join(f: Factory, mode: str) -> list:
     ]
 
 
+def _script_request_never_applied(f: Factory, mode: str) -> list:
+    """The boundary durably accepts a request, the application leg is
+    dropped, and the destination never receives the mutation. The protected
+    boundary classifies by reading the destination back and reports
+    requested-and-queued, then writes a terminal record when the window
+    closes with the effect still absent. The unsafe boundary classifies from
+    its own accepted dispatch, reports requested-and-applied, and records
+    nothing."""
+
+    def submit_request():
+        f.claim_work(WORK_ID, attempt=1)
+        f.launch_session(WORK_ID, "worker-1", attempt=1)
+        f.accept_request(REQUEST_ID, WORK_ID, [EFFECT_ID])
+
+    def application_leg():
+        session = f.attempt_sessions[1]
+
+        def apply():
+            f.apply_effect(WORK_ID, session, EFFECT_ID, "payload-1", attempt=1)
+        f.emit_event("apply-effect", apply, request_id=REQUEST_ID,
+                     effect_id=EFFECT_ID)
+
+    def report_outcome():
+        if mode == "protected":
+            f.classify_by_readback(REQUEST_ID)
+        else:
+            f.classify_by_dispatch(REQUEST_ID)
+
+    def close_window():
+        # The sweep that resolves accepted requests. Its absence is what
+        # lets a returned outcome expire with nothing on record.
+        if not f.reconciler_enabled:
+            f.log("request-sweep-absent", request_id=REQUEST_ID)
+            return
+        request = f.requests[REQUEST_ID]
+        if request.outcome in TERMINAL_OUTCOMES:
+            f.record_request_terminal(REQUEST_ID, request.outcome,
+                                      "the returned outcome was terminal")
+            return
+        f.record_request_terminal(
+            REQUEST_ID, "expired",
+            "accepted request still unapplied when the window closed")
+
+    return [
+        ("action", "submit-request", submit_request),
+        ("barrier", "request-accepted", None),
+        ("action", "application-leg", application_leg),
+        ("action", "report-outcome", report_outcome),
+        ("action", "close-window", close_window),
+        ("barrier", "run-complete", None),
+    ]
+
+
 _SCRIPT_BUILDERS = {
     "worker-dies-agent-survives": _script_worker_dies,
     "stale-writer-completes": _script_stale_writer,
     "effect-commits-ack-is-lost": _script_effect_ack,
     "event-is-lost": _script_event_lost,
     "child-completes-after-join": _script_child_after_join,
+    "request-accepted-effect-never-applied": _script_request_never_applied,
 }
 
 

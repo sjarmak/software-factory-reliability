@@ -5,7 +5,8 @@ Usage:
         [--out-dir out/evidence]
 
 Drills: worker-dies-agent-survives, stale-writer-completes,
-effect-commits-ack-is-lost, event-is-lost, child-completes-after-join.
+effect-commits-ack-is-lost, event-is-lost, child-completes-after-join,
+request-accepted-effect-never-applied.
 
 Exit codes:
     0  protected mode and the oracle passed
@@ -34,8 +35,8 @@ from pathlib import Path
 if __package__ in (None, ""):  # pragma: no cover - script-invocation path
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from adapters.in_memory.adapter import (CHILD_IDS, EFFECT_ID, STRAGGLER_ID,
-                                        WORK_ID, InMemoryAdapter)
+from adapters.in_memory.adapter import (CHILD_IDS, EFFECT_ID, REQUEST_ID,
+                                        STRAGGLER_ID, WORK_ID, InMemoryAdapter)
 
 
 class DrillError(Exception):
@@ -341,6 +342,83 @@ def _oracle_child_after_join(evidence: dict) -> dict:
     }
 
 
+def _oracle_request_never_applied(evidence: dict) -> dict:
+    """Two checks over one accepted request whose effect never landed.
+
+    Truthfulness: the outcome the boundary returned must not be
+    success-shaped while the destination holds none of the requested
+    effects. Terminality: the accepted request must hold a durable terminal
+    record at end of run, since a returned value is not a record and a
+    caller that discarded it leaves nothing for a later scan to find.
+
+    Landed effects are recounted here from the destination snapshot rather
+    than read from the factory's own classification, so the oracle does not
+    inherit the belief it is checking. The verdict only counts if the log
+    shows the application leg actually dropped after acceptance and the
+    boundary actually classified afterwards.
+    """
+    events = evidence["events"]
+    state = evidence["authoritative_state"]
+    effects = evidence["external_effects"]
+    description = ("The request was accepted, its application leg was "
+                   "dropped, the boundary classified the outcome, and the "
+                   "window closed: the returned outcome is not success-shaped "
+                   "over an empty destination and the request holds a "
+                   "terminal record.")
+    missing = []
+    accept_tick = _first_tick(events, "request-accepted", request_id=REQUEST_ID)
+    if accept_tick is None:
+        missing.append("the accepted request")
+    drop_tick = _first_tick(events, "apply-effect-dropped",
+                            request_id=REQUEST_ID)
+    if drop_tick is None or (accept_tick is not None
+                             and drop_tick <= accept_tick):
+        missing.append("the dropped application leg after acceptance")
+    classify_tick = _first_tick(events, "outcome-classified",
+                                request_id=REQUEST_ID)
+    if classify_tick is None or (drop_tick is not None
+                                 and classify_tick <= drop_tick):
+        missing.append("an outcome classified after the drop")
+    close_tick = None
+    for kind in ("request-terminal", "request-sweep-absent"):
+        tick = _first_tick(events, kind, request_id=REQUEST_ID)
+        if tick is not None:
+            close_tick = tick
+            break
+    if close_tick is None or (classify_tick is not None
+                              and close_tick <= classify_tick):
+        missing.append("the window closing after the classification")
+    if missing:
+        return _preconditions_failed(
+            missing, "outcome-matches-postcondition", description)
+    request = state.get("requests", {}).get(REQUEST_ID, {})
+    requested = request.get("requested_effects", [])
+    applied = {m["effect_id"] for m in effects["mutations"]}
+    landed = sorted(effect for effect in requested if effect in applied)
+    outcome = request.get("outcome")
+    terminal = request.get("terminal")
+    truthful = not (outcome == "requested-and-applied" and not landed)
+    recorded = terminal is not None
+    if outcome is None:
+        verdict = "error"
+    else:
+        verdict = "pass" if (truthful and recorded) else "violation"
+    return {
+        "name": "outcome-matches-postcondition",
+        "description": description,
+        "expected": {"success_shaped_over_empty_destination": False,
+                     "terminal_record": True},
+        "observed": {"reported_outcome": outcome,
+                     "landed_effects": landed,
+                     "requested_effects": requested,
+                     "terminal_record": terminal},
+        "detail": {"accept_tick": accept_tick, "drop_tick": drop_tick,
+                   "classify_tick": classify_tick, "close_tick": close_tick,
+                   "truthful": truthful, "recorded": recorded},
+        "verdict": verdict,
+    }
+
+
 @dataclass(frozen=True)
 class DrillSpec:
     barrier: str
@@ -378,6 +456,11 @@ DRILLS: dict[str, DrillSpec] = {
         oracle=_oracle_child_after_join,
         post_fault_ops=(("advance_generation", {"work_id": WORK_ID}),),
         fault_target=STRAGGLER_ID,
+    ),
+    "request-accepted-effect-never-applied": DrillSpec(
+        barrier="request-accepted",
+        fault_kind="drop_event",
+        oracle=_oracle_request_never_applied,
     ),
 }
 
