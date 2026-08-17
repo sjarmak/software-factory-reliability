@@ -41,15 +41,26 @@ level-triggered asked whether the work had actually landed.
 That reaper is disabled in the system this page draws on, and the way it was
 disabled is the failure. On 2026-08-07 a capacity decision reduced the fleet to
 three standing seats and disarmed 42 scheduled orders in a single commit,
-described as work patrols. Two of the 42 were not work patrols. One is the
-level-triggered landing scan cited above. The other closes workflow roots left
-in progress after their work item has already closed. Neither dispatches
-anything: both are read-only by default, their mutating mode only closes records
-in the system's own store, one mails a report under an opt-in flag, and both are
-reversible. The reason for disarming a patrol under reduced capacity is that it
-hands work to seats that are not there. That reason does not apply to a scan
-that only repairs the record, and no one separated the two classes before
+described as work patrols. At least two of the 42 were not work patrols. One is
+the level-triggered landing scan cited above. The other closes workflow roots
+left in progress after their work item has already closed. Neither, **as
+scheduled**, dispatches anything or mutates anything: both default to a
+report-only mode, and the disabled order files invoke them without the flag that
+turns mutation on. The reason for disarming a patrol under reduced capacity is
+that it hands work to seats that are not there. That reason does not apply to a
+scan that only reports on the record, and no one separated the two classes before
 disabling them as a group.
+
+The qualifier "as scheduled" is doing real work, and getting it wrong is easy.
+Read as scripts, these two are not alike at all. The workflow-root scan's
+mutating mode closes beads in the system's own store and is reversible by
+reopening them. The landing scan's mutating mode rebases and fast-forward merges
+real branches, sets bead status, and mails an escalation, all of which are
+reachable only past its apply guard. Judging either one by its name, or by
+grepping its source for dispatch verbs, gets the wrong answer: both source files
+contain calls that look like dispatch, and in the scheduled configuration
+neither can reach them. Classify the invocation the scheduler actually runs, not
+the capability the file contains.
 
 Ten days later the disarmed cleanup scan, run by hand in its default read-only
 mode, reported 11 stranded workflow roots and 58 stranded finalize steps, with
