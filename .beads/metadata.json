@@ -1,7 +1,0 @@
-{
-  "database": "dolt",
-  "backend": "dolt",
-  "dolt_mode": "server",
-  "dolt_database": "software_factory_reliability",
-  "project_id": "e81e7898-b027-45bc-8822-bcaeb7db2781"
-}

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Prose conventions checker for this repository.
 
-Scans every Markdown file under the repo root (skipping .beads, out,
-node_modules, .git and similar) for hard-banned characters and phrases
+Scans every Markdown file under the repo root (skipping gitignored agent and
+tracker scaffolding, out, node_modules, .git and similar) for hard-banned
+characters and phrases
 (failures) and weaker stylistic signals (warnings). Also scans YAML, JSON,
 JSONL, and Python files under the content directories for em dashes only.
 
@@ -20,8 +21,15 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
+# Agent and issue-tracker scaffolding, gitignored and tool-managed. It is
+# present on a contributor's disk and absent from a clean clone, so scanning
+# it would make `make check` mean two different things.
 SKIP_DIR_NAMES = {
+    ".agents",
     ".beads",
+    ".claude",
+    ".codex",
+    ".cursor",
     "out",
     "node_modules",
     ".git",

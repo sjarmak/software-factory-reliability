@@ -1,9 +1,18 @@
 
-# Beads / Dolt files (added by bd init)
+# Agent and issue-tracker scaffolding. Local tooling, not part of the
+# published kit: bd's Dolt database, its git hooks, its issue export (which
+# carries private working context), and the config each agent harness writes
+# into the repository. Everything here stays on disk and keeps working
+# locally; a fresh clone re-creates it with `bd init` and whichever harness
+# you run.
+.agents/
+.beads/
+.claude/
+.codex/
+.cursor/
 .dolt/
 *.db
 .beads-credential-key
-.beads/proxieddb/
 *.gate.lock*
 
 # OS noise
@@ -17,6 +26,3 @@ __pycache__/
 
 # Local drafts, not for publication
 essay/
-
-# Local issue-tracker export (contains private working context)
-.beads/issues.jsonl
