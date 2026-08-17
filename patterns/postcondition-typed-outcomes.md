@@ -310,6 +310,29 @@ widen it is the consumer, not the boundaries. Widening a consuming layer is one
 change; narrowing every boundary beneath it to fit is as many changes as there
 are boundaries, and it destroys the information rather than delivering it.
 
+Running that audit on the same system found the second site immediately, in a
+path nobody had thought of as a consumer. Besides the exec path, the scheduler
+has a condition path: an order may declare a check command, and the check's
+documented contract is that exit zero means fire and non-zero means the
+condition is not met. One such check reports whether any undelivered escalation
+exists, and its own header says non-zero means there are none, which is the
+healthy steady state. The trigger evaluator returns not-due in both cases, so
+behaviour is correct, and the reason string it attaches renders the healthy
+state as "check command failed: exit status 1" on the operator's primary order
+listing. That single string covers two different situations: the condition was
+evaluated and is false, and the check could not be run at all because its
+binary is missing or unreadable. An operator scanning the list cannot tell a
+resting order from one that has never been able to evaluate its own trigger
+(gascity2026:internal/orders/triggers.go).
+
+The instructive part is that the exec path and the condition path are in the
+same package, written by the same people, and only one of them was found by
+looking at the red board, because this one does not produce a red anything. It
+produces a normal-looking listing with an alarming word in it, which costs a
+reader's time on every scan and hides the genuine could-not-run case
+permanently. Auditing consuming layers means enumerating all of them, including
+the ones whose truncation does not show up as a failure.
+
 The enforcement fails to be available in one case, and that case has an answer.
 When the destination cannot be read back (no query keyed by the request
 identity, a read path that is down, an answer the boundary cannot trust), the
@@ -447,6 +470,13 @@ recorded. Evidence for both arms lands in `out/evidence/`.
   observation, measured 2026-08-17 by invoking the gate read-only and by
   re-querying the CI provider rather than trusting the tool's own exit line
   (gascity2026:bin/fork-pr-approval-gate).
+- The same truncation recurs in a second consuming path in the same package,
+  found by running this pattern's own audit rather than by reading the board:
+  a condition trigger whose check contract is exit-zero-fires, non-zero-does-not,
+  where the not-met case and the check-could-not-run case share one reason
+  string, so a resting order and an order that has never evaluated its trigger
+  are indistinguishable on the operator's primary listing: local observation,
+  measured 2026-08-17 (gascity2026:internal/orders/triggers.go).
 - Idempotent receivers and request identifiers as the precondition for a safe
   retry: foundational (Joshi 2023, Patterns of Distributed Systems).
 - Fault classification into rejected-before-mutation, failed-after-mutation, and
@@ -509,6 +539,7 @@ obligation rather than removing it.
 - gascity2026:docs/adr/0021-idempotent-convergence-and-fenced-publication.md
 - gascity2026:cmd/gc/order_dispatch.go
 - gascity2026:bin/fork-pr-approval-gate
+- gascity2026:internal/orders/triggers.go
 - gascity2026:internal/orders/order.go
 - Joshi 2023, Patterns of Distributed Systems (idempotent receiver, request identifiers)
 - Waldo, Wyant, Wollrath, Kendall 1994, A Note on Distributed Computing
