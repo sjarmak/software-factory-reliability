@@ -40,6 +40,17 @@ That is what makes one comparison sufficient to catch both, and it is why this
 page treats them together rather than as separate failures of overcaution and
 undercaution.
 
+Adding tests does not close this, and the reason it does not is the step most
+teams reach for next. A check and the test double it runs against are usually
+written in one sitting, by one person, from one understanding of what the tool
+under check emits. When that understanding is wrong it is wrong in both places
+at once: the predicate asserts a value the tool cannot produce, and the double
+produces exactly that value. Every mutation the author then thinks to write is
+a departure from a fixture that was never the tool's output, so the suite goes
+green and stays green over an instrument that could not have verified one real
+subject. The green is manufactured by the harness, and it is evidence about the
+double rather than weak evidence about the check.
+
 Three pages in this kit border this one and none of them cover it.
 [verify-before-publish](verify-before-publish.md) requires an independent
 mechanism to establish the postcondition before an artifact is published; this
@@ -115,6 +126,34 @@ difference between operators before either of them checked the arithmetic. An
 instrument that is wrong by two survives scrutiny in a way that one wrong by
 fifty does not.
 
+The harness case is visible in the same installation on two store-maintenance
+instruments, both rewritten from shell into Python on 2026-08-14. Each calls the
+storage engine's garbage collector and compares the engine's report against a
+literal. One required the byte string `status\n1\n` from a `CALL DOLT_GC()`
+probe, where the engine declares that column as an integer and returns 0 on
+success. The other carried the same inversion at three call sites, plus a
+predicate requiring a dry run's key set to be exactly `{"commit_count"}` where
+the tool emits seven keys, plus a whole-dictionary comparison against a
+revalidation record it could not match. No predicate among them could be
+satisfied by the real tool at any point in its history. The first instrument
+raised `garbage collection unproved` on the first of 25 databases and never
+reached the other 24, and its store grew 308 MiB against a 184 MiB mean nightly
+reclaim; the second stayed inert while its corpus went from 2,075 to 9,245
+commits, 85 percent past the threshold it exists to enforce (local observation,
+gascity2026:bin/dolt-gc-maintenance, gascity2026:bin/dolt-flatten-maintenance).
+
+Each shipped with a Python suite, and each suite was green: 23 tests on one, 29
+on the other. The stubs returned the values the broken predicates demanded, a
+status byte of 1 and a single-key dictionary, so the two instruments were tested
+against a tool that does not exist. In the first suite the engine's real output
+was wired in as the injected fault, which means the test written to catch this
+defect asserted it. Repairing the doubles to emit what the engine emits, then
+running the repaired suites against the code as it shipped, fails 11 of 23 tests
+on one instrument and 14 of 29 on the other. Among the failures on each is the
+mutation test itself, because several of its named mutants can no longer be
+applied: the shipped source already contained the mutation the test wanted to
+introduce.
+
 Ten instruments in that installation have a single outcome word in their entire
 recorded vocabulary. One reaper has written exactly one line in its lifetime,
 and that line reports a detection, so nobody knows what it does when there is
@@ -138,6 +177,15 @@ commentary, because then the consumer's number is computed from what the check
 said about itself. Data rows carry a token that no summary, advice, or heading
 line contains, and the suite asserts that extracting by that token returns the
 same count the check reports in prose.
+
+Provenance binds the demonstration as well as the verdict. A test double is an
+assertion about what the tool emits, so a double composed from the check's
+expectation supplies the check with its own belief and every verdict computed
+against it is self-supplied at one remove. The double's values are traceable to
+a recorded run of the real tool, and the suite is run once against the subject
+as it shipped, where it must fail. A suite that has only been observed passing
+against the revision it was written beside carries no information about which of
+the two was wrong.
 
 ## Mechanism
 
@@ -172,6 +220,25 @@ destination, the external system, or an ordered log that the subject cannot
 edit after the fact. When the only available input is written by the subject,
 the check is a consistency check between two of the subject's claims, and it
 should say so in its own name rather than presenting as a check on the world.
+
+**Build the double from the tool's output, not from the check's expectation.**
+Capture a real invocation and paste what it printed. A fixture composed from
+what the check is looking for cannot disagree with the check, and disagreement
+is the only thing a fixture is for. Keep the captured bytes in the test file
+with a comment naming the tool version they came from, so the next reviewer can
+compare the fixture against the tool rather than against the predicate. The
+inverse move is the one to watch for at review: a stub whose values were
+adjusted until the suite went green is a record of what the author believed, and
+it will hold that belief against every later reader.
+
+**Run the suite against the code as it shipped, and require it to fail.**
+Passing against the fix is one direction of a two-direction claim, and only the
+second direction separates a suite that measures the oracle from a suite that
+was fitted to it. Give the subject an environment override so the control is one
+command rather than a branch checkout, and record its result beside the mutation
+pair. The failing test names are themselves a report: a named mutant that cannot
+be applied, because the shipped source already contains it, is the suite saying
+the shipped code was the mutant.
 
 **Give the check more than one outcome word, and make absence meaningful.** An
 instrument that writes a record only when it finds something cannot distinguish
@@ -217,6 +284,14 @@ supplying the evidence here, one of which had left 25 contributor pull requests
 under a standing block at a 42 day median (local observation,
 gascity2026:docs/conventions/city-learnings.md).
 
+The control run belongs on the same rail, for the narrower case of a change that
+repairs a check. Requiring the suite to pass against the change and fail against
+its parent is mechanical, needs no judgment about what the check means, and is
+the one automatic rail that catches a harness written from the same
+misunderstanding as the code it tests. It costs one extra suite run, and it is
+only available while the parent revision still holds the defect, which is an
+argument for running it at review time rather than filing it as future work.
+
 The demonstration itself does not automate. Whether a mutation is the one that
 crosses the check's claim is a judgment about what the check is for, and a
 mutation generator will produce many that flip a verdict for reasons unrelated
@@ -242,6 +317,15 @@ strand it: the check keeps its shape, the mutation no longer reaches it, and
 the recorded pair reads as current evidence. This is why the pair names a test
 rather than describing an outcome in prose. A named test is re-run by the
 suite; a described outcome is only re-read, and re-reading is what fails here.
+
+A control run against the parent revision proves the suite discriminates between
+those two revisions of the subject and nothing wider. It says nothing about
+whether the double still matches the tool. A fixture captured from one version
+of an external tool ages with that tool, and when the tool's output format moves,
+the double keeps asserting the old shape while the check in production meets the
+new one. That restores the original defect with a green suite sitting over it,
+and the provenance comment on the capture is the only thing that makes the
+staleness legible on a later read.
 
 Nothing here addresses false positives or the cost of a check that fires
 correctly but too often. A check can discriminate perfectly and still be
@@ -295,6 +379,16 @@ green. Evidence for both arms lands in `out/evidence/`.
   converging before that (local observation,
   gascity2026:docs/asks-and-outcomes.md,
   gascity2026:.gc-reports/factory-contract-audit-2026-08-16/factory.yaml).
+- Two instruments verifying the same storage engine both required a status byte
+  of 1 where the engine returns 0, and both shipped suites forged that byte: 23
+  and 29 tests green over instruments that could not have verified one real
+  database, one of them dead since a rewrite three days earlier. The repaired
+  suites run against the shipped code fail 11 of 23 and 14 of 29 (local
+  observation, gascity2026:bin/dolt-gc-maintenance,
+  gascity2026:bin/dolt-flatten-maintenance).
+- The first of those instruments verified 25 of 25 databases on its next
+  production run and reclaimed 171 MiB, its first complete sweep in four days
+  (local observation, gascity2026:docs/asks-and-outcomes.md).
 - Ten instruments in one installation have a single outcome word in their
   entire recorded history, one of them having written exactly one line ever
   (local observation, gascity2026:docs/conventions/instrument-contract.md).
@@ -349,7 +443,12 @@ This kit is subject to its own page, and meets it in one place only. The
 oracles in the executable drills are checks, and each one is admitted here on a
 per-rail mutation of the protected arm with the other rail held green. That
 covers the oracles. It does not cover the schema checker or the prose checker
-in this repository, which have not been put through the same demonstration.
+in this repository, which have not been put through the same demonstration. Nor
+does this repository run the control described above on its own oracles: their
+fixtures are composed in the simulator rather than captured from an external
+tool, so the provenance rule is satisfied trivially and the fail-against-parent
+rail has never been exercised here. That is the weaker half of this page as it
+applies to the kit itself, and it is stated rather than fixed.
 
 The installation supplying most of the observations above fails this pattern
 broadly, and the failure is the default rather than the exception there: every
@@ -368,6 +467,8 @@ machinery and the written rule and still shipped guards nobody had made fail.
 - gascity2026:docs/asks-and-outcomes.md
 - gascity2026:bin/asks-vault-mirror
 - gascity2026:bin/cass-index-refresh
+- gascity2026:bin/dolt-gc-maintenance
+- gascity2026:bin/dolt-flatten-maintenance
 - DeMillo, Lipton, Sayward 1978, Hints on Test Data Selection
 - Papadakis, Kintis, Zhang, Jia, Le Traon, Harman 2019, Mutation Testing
   Advances: An Analysis and Survey
