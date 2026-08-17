@@ -67,13 +67,31 @@ show evidence for is a guess.
 | `patterns/` | Eleven pattern pages, one per recurring failure boundary |
 | `drills/` | Eight fault-drill specifications; four are executable against the simulator |
 | `adapters/` | The adapter protocol and an in-memory simulator that runs drills |
-| `recipes/` | Worked recipes combining patterns for common factory shapes |
+| `recipes/` | Five worked recipes: four factory shapes, plus a recovery path |
 | `fixtures/` | Multi-repo and single-repo fixtures used by drills and tests |
 | `observability/` | Event conventions, latency expectations, sample events, queries, coverage |
 | `evidence/` | The evidence map (per-pattern claims with basis labels) and sources |
 | `diagrams/` | Mermaid diagrams: authority planes, identity stack, campaign coverage loop |
 | `scripts/` | `prose-check.py` and `schema_check.py`, run by `make check` |
 | `tests/` | Test suite for the CLI, adapters, and drills |
+
+## Recipes
+
+Each recipe names the patterns a factory shape requires, the contract sections
+that declare them, and the drills that test them.
+
+- [issue-to-pull-request](recipes/issue-to-pull-request.md): one issue in, one
+  verified pull request out.
+- [background-maintenance](recipes/background-maintenance.md): recurring
+  convergent housekeeping, and the case for a timer over an engine.
+- [cross-repository-migration](recipes/cross-repository-migration.md): one
+  change fanned across many repositories, joined by coverage.
+- [human-approved-production-effect](recipes/human-approved-production-effect.md):
+  an irreversible mutation gated on a named human decision.
+- [factory-recovery](recipes/factory-recovery.md): the entry point when the
+  factory is already broken. The other four assume you can describe your
+  factory; this one recovers enough truth to write the contract in the first
+  place.
 
 ## Evidence states
 

@@ -128,6 +128,11 @@ testing nothing.
 python3 cmd/factory-check/factory_check.py init my-factory.yaml
 ```
 
+If step 1 below is where you stall, because the topology drifted, the store
+disagrees with the world, or nobody can say which work items still exist,
+start with [recipes/factory-recovery.md](recipes/factory-recovery.md) instead
+and come back here with its inventory.
+
 Then work the loop:
 
 1. **Describe**: fill in the generated contract with your workers, promises,
