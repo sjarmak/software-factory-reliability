@@ -434,6 +434,21 @@ green. Evidence for both arms lands in `out/evidence/`.
   forge reported that field as unknown while recomputing it, though the
   request was plainly still open. The narrower predicate on open-or-not was
   stable (local observation, gascity2026:bin/decision-premise-check).
+- The same shape recurred four days later in an unrelated instrument, which is
+  the argument for treating it as a property of fail-closed publishers rather
+  than a bug in one of them. A gate that finds continuous-integration runs
+  awaiting approval on outside-contributor requests validates each row of the
+  forge's response and raises if a row carries anything other than exactly one
+  associated request. The forge returns zero associations for precisely the
+  fork-triggered runs the gate exists to find: measured on the day it was
+  diagnosed, one hundred of one hundred awaiting-approval runs carried none. The
+  gate raised on the first row of the first page, before any filtering, and
+  reported an incomplete result on every fire for four days. Eleven
+  outside-contributor requests sat with their runs stuck, nine of them arriving
+  after the gate went blind and never surfaced to anyone. An item-scoped refusal
+  is paid for by whoever is downstream of the channel, and here that was people
+  outside the organisation entirely (local observation,
+  gascity2026:bin/fork-pr-approval-gate).
 - Ten instruments in one installation have a single outcome word in their
   entire recorded history, one of them having written exactly one line ever
   (local observation, gascity2026:docs/conventions/instrument-contract.md).
@@ -521,6 +536,7 @@ machinery and the written rule and still shipped guards nobody had made fail.
 - gascity2026:bin/dolt-flatten-maintenance
 - gascity2026:bin/slack-binding-reaper
 - gascity2026:bin/decision-ledger-push
+- gascity2026:bin/fork-pr-approval-gate
 - gascity2026:bin/decision-premise-check
 - DeMillo, Lipton, Sayward 1978, Hints on Test Data Selection
 - Papadakis, Kintis, Zhang, Jia, Le Traon, Harman 2019, Mutation Testing
