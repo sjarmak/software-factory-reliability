@@ -442,9 +442,14 @@ checks report detections alone has no way to see this class at all.
 This kit is subject to its own page, and meets it in one place only. The
 oracles in the executable drills are checks, and each one is admitted here on a
 per-rail mutation of the protected arm with the other rail held green. That
-covers the oracles. It does not cover the schema checker or the prose checker
-in this repository, which have not been put through the same demonstration. Nor
-does this repository run the control described above on its own oracles: their
+covers the oracles. The schema checker and the prose checker in this repository
+were put through the same demonstration and each was observed red: removing a
+required property from a work manifest fixture, removing an identity field from
+one line of the sample event log, and adding a banned phrase and an em dash to a
+probe page each produced a specific named failure, and the probes were deleted
+afterwards. That satisfies the make-it-fail clause for those two and says
+nothing about the provenance one. This repository does not run the control
+described above on its own oracles: their
 fixtures are composed in the simulator rather than captured from an external
 tool, so the provenance rule is satisfied trivially and the fail-against-parent
 rail has never been exercised here. That is the weaker half of this page as it
