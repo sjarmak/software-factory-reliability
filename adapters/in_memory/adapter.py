@@ -29,12 +29,15 @@ _COMMAND_VALIDATOR = jsonschema.Draft202012Validator(
 
 WORK_ID = "w-1"
 EFFECT_ID = "eff-1"
+CHILD_IDS = ("c-1", "c-2", "c-3")
+STRAGGLER_ID = "c-3"
 MODES = ("protected", "unsafe")
 SCENARIOS = (
     "worker-dies-agent-survives",
     "stale-writer-completes",
     "effect-commits-ack-is-lost",
     "event-is-lost",
+    "child-completes-after-join",
 )
 
 
@@ -206,11 +209,99 @@ def _script_event_lost(f: Factory, mode: str) -> list:
     ]
 
 
+def _script_child_after_join(f: Factory, mode: str) -> list:
+    """The coordinator fans work out to three children. One child's lease
+    expires and it is dispositioned blocked, so the join fires over the two
+    that published. The written-off child then finishes and writes into the
+    merge slot. The protected wiring fences that slot on the parent's join
+    generation and recomputes the fold from the durable child records; the
+    unsafe wiring checks the child's own stale observation and never
+    recomputes."""
+    state: dict = {}
+
+    def fan_out():
+        f.claim_work(WORK_ID, attempt=1)
+        f.launch_session(WORK_ID, "worker-1", attempt=1)
+        for index, child in enumerate(CHILD_IDS):
+            attempt = index + 2
+            worker = f"worker-{attempt}"
+            f.start_worker(worker)
+            f.claim_work(child, attempt=attempt)
+            f.launch_session(child, worker, attempt=attempt)
+
+    def children_publish():
+        for index, child in enumerate(CHILD_IDS):
+            if child == STRAGGLER_ID:
+                continue
+            attempt = index + 2
+            session = f.attempt_sessions[attempt]
+            f.apply_effect(child, session, f"eff-{child}", f"payload-{child}",
+                           attempt=attempt)
+            f.complete_work(child, session, attempt=attempt, generation=1)
+
+    def straggler_prepares():
+        # The straggler computes its write into the merge slot before the join
+        # fires, so its observation of the destination is empty and stays
+        # empty. That stale observation is what the unfenced path checks.
+        artifact_id, observed = f.prepare_merge(
+            WORK_ID, [STRAGGLER_ID], 1, f.attempt_sessions[4])
+        state["straggler_artifact"] = artifact_id
+        state["straggler_observed"] = observed
+
+    def _join(label: str):
+        dispositions = f.derive_dispositions(list(CHILD_IDS))
+        undispositioned = sorted(child for child, d in dispositions.items()
+                                 if d == "undispositioned")
+        if undispositioned:
+            f.log("join-incomplete", work_id=WORK_ID,
+                  undispositioned=undispositioned)
+            return
+        folded = sorted(child for child, d in dispositions.items()
+                        if d == "published")
+        generation = f.work_items[WORK_ID].generation
+        artifact_id, observed = f.prepare_merge(
+            WORK_ID, folded, generation, f.attempt_sessions[1])
+        f.publish(WORK_ID, artifact_id, generation, f.attempt_sessions[1],
+                  observed_generation=observed)
+        f.log(label, work_id=WORK_ID, artifact_id=artifact_id,
+              folded_children=folded, generation=generation,
+              dispositions=dispositions)
+
+    def join_fires():
+        _join("join-published")
+
+    def straggler_returns():
+        session = f.attempt_sessions[4]
+        f.apply_effect(STRAGGLER_ID, session, f"eff-{STRAGGLER_ID}",
+                       f"payload-{STRAGGLER_ID}", attempt=4)
+        f.complete_work(STRAGGLER_ID, session, attempt=4, generation=1)
+        f.publish(WORK_ID, state["straggler_artifact"], 1, session,
+                  observed_generation=state["straggler_observed"])
+
+    def recompute_join():
+        if not f.reconciler_enabled:
+            f.log("join-recompute-absent", work_id=WORK_ID)
+            return
+        _join("join-recomputed")
+
+    return [
+        ("action", "fan-out", fan_out),
+        ("action", "children-publish", children_publish),
+        ("action", "straggler-prepares", straggler_prepares),
+        ("barrier", "before-join", None),
+        ("action", "join-fires", join_fires),
+        ("action", "straggler-returns", straggler_returns),
+        ("action", "recompute-join", recompute_join),
+        ("barrier", "run-complete", None),
+    ]
+
+
 _SCRIPT_BUILDERS = {
     "worker-dies-agent-survives": _script_worker_dies,
     "stale-writer-completes": _script_stale_writer,
     "effect-commits-ack-is-lost": _script_effect_ack,
     "event-is-lost": _script_event_lost,
+    "child-completes-after-join": _script_child_after_join,
 }
 
 
@@ -264,6 +355,9 @@ class InMemoryAdapter:
         f = Factory(semantics, publisher_mode, reconciler_enabled)
         generation = 7 if scenario == "stale-writer-completes" else 1
         f.add_work(WORK_ID, generation=generation)
+        if scenario == "child-completes-after-join":
+            for child in CHILD_IDS:
+                f.add_work(child, generation=1)
         f.start_worker("worker-1")
         f.log("seeded", scenario=scenario, mode=mode)
         self.factory = f
@@ -330,6 +424,8 @@ class InMemoryAdapter:
         elif kind == "expire_lease":
             f.expire_lease(params.get("target", WORK_ID))
         record = {"kind": kind, "at_barrier": at_barrier}
+        if "target" in params:
+            record["target"] = params["target"]
         self.faults.append(record)
         return record
 

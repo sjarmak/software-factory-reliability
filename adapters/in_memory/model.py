@@ -300,6 +300,49 @@ class Factory:
                  observed_generation=observed)
         return artifact_id, observed
 
+    def prepare_merge(self, parent_id: str, children: list[str],
+                      generation: int, session_id: str) -> tuple[str, int | None]:
+        """Derive a merged artifact's identity from the child set it folds.
+
+        Two joins that folded the same children produce the same identity, and
+        two joins that folded different children produce different ones, so a
+        retried join is a duplicate write of a known identity rather than a
+        second merged artifact. As with prepare_artifact, the destination
+        generation the caller observed here is what the unfenced publication
+        path later checks against.
+        """
+        folded = sorted(children)
+        artifact_id = ("merge-" + "+".join(folded)) if folded else "merge-empty"
+        self._note(self.artifact_ids, artifact_id)
+        current = self.destination.artifact
+        observed = current["generation"] if current else None
+        self.log("merge-prepared", work_id=parent_id, session_id=session_id,
+                 artifact_id=artifact_id, generation=generation,
+                 folded_children=folded, observed_generation=observed)
+        return artifact_id, observed
+
+    def derive_dispositions(self, child_ids: list[str]) -> dict[str, str]:
+        """Fold each child's own evidence into a disposition.
+
+        published: the child's effect is committed at the destination and its
+        completion is recorded. blocked: the child holds no lease and has not
+        completed, so someone must act on it. undispositioned otherwise, which
+        is the state that must block a join rather than be dropped from it.
+        Derived on every call from the durable record, never cached.
+        """
+        applied = {m.effect_id for m in self.destination.mutations}
+        dispositions = {}
+        for child_id in sorted(child_ids):
+            item = self.work_items[child_id]
+            if item.status == "completed" and f"eff-{child_id}" in applied:
+                dispositions[child_id] = "published"
+            elif item.lease is None and item.status != "completed":
+                dispositions[child_id] = "blocked"
+            else:
+                dispositions[child_id] = "undispositioned"
+        self.log("dispositions-derived", dispositions=dispositions)
+        return dispositions
+
     def publish(self, work_id: str, artifact_id: str, generation: int,
                 session_id: str, observed_generation: int | None = None) -> bool:
         if self.publisher_mode == "fenced":

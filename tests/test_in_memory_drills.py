@@ -1,7 +1,7 @@
-"""Pytest coverage for the four in-memory drills in both modes.
+"""Pytest coverage for the five in-memory drills in both modes.
 
 Each drill-mode pair is run through the callable API (run_drill) for
-speed; exit codes and evidence-file invariants are asserted for all eight
+speed; exit codes and evidence-file invariants are asserted for all ten
 combinations, plus determinism and protocol-validation checks.
 """
 
@@ -30,14 +30,32 @@ EXPECTED_BARRIER = {
     "stale-writer-completes": "before-publication",
     "effect-commits-ack-is-lost": "effect-committed-ack-pending",
     "event-is-lost": "before-ledger-event",
+    "child-completes-after-join": "before-join",
 }
+# Full fault records: a targeted fault carries the target it was aimed at, so
+# the evidence names which lease expired rather than leaving it to the log.
 EXPECTED_FAULT = {
-    "worker-dies-agent-survives": "kill_worker",
-    "stale-writer-completes": "expire_lease",
-    "effect-commits-ack-is-lost": "drop_event",
-    "event-is-lost": "drop_event",
+    "worker-dies-agent-survives": {"kind": "kill_worker"},
+    "stale-writer-completes": {"kind": "expire_lease"},
+    "effect-commits-ack-is-lost": {"kind": "drop_event"},
+    "event-is-lost": {"kind": "drop_event"},
+    "child-completes-after-join": {"kind": "expire_lease", "target": "c-3"},
+}
+# Work items each scenario seeds, in identity_snapshot order (sorted).
+EXPECTED_WORK_IDS = {
+    "worker-dies-agent-survives": ["w-1"],
+    "stale-writer-completes": ["w-1"],
+    "effect-commits-ack-is-lost": ["w-1"],
+    "event-is-lost": ["w-1"],
+    "child-completes-after-join": ["c-1", "c-2", "c-3", "w-1"],
 }
 COMBOS = [(drill, mode) for drill in sorted(DRILLS) for mode in MODES]
+
+
+def _expected_fault(drill: str) -> dict:
+    record = dict(EXPECTED_FAULT[drill])
+    record["at_barrier"] = EXPECTED_BARRIER[drill]
+    return record
 
 
 def _run(tmp_path: Path, drill: str, mode: str) -> tuple[int, dict]:
@@ -60,8 +78,7 @@ def test_evidence_invariants(tmp_path, drill, mode):
     assert ev["scenario"] == drill
     assert ev["mode"] == mode
     assert ev["barrier"] == EXPECTED_BARRIER[drill]
-    assert ev["fault"] == {"kind": EXPECTED_FAULT[drill],
-                           "at_barrier": EXPECTED_BARRIER[drill]}
+    assert ev["fault"] == _expected_fault(drill)
     assert ev["oracle"]["verdict"] == EXPECTED_VERDICT[mode]
 
     # The fault barrier was reached and the run completed.
@@ -84,7 +101,7 @@ def test_evidence_invariants(tmp_path, drill, mode):
                 "worker_ids", "claim_ids", "effect_ids", "artifact_ids",
                 "mutation_ids", "receipt_ids", "attempt_to_session"):
         assert key in identities, f"identities missing {key}"
-    assert identities["work_ids"] == ["w-1"]
+    assert identities["work_ids"] == EXPECTED_WORK_IDS[drill]
     assert identities["attempt_ids"], "no attempt ids recorded"
     assert identities["session_ids"], "no session ids recorded"
     assert identities["attempt_to_session"], "no attempt-to-session mapping"
@@ -144,6 +161,86 @@ def test_event_lost_convergence(tmp_path, mode):
         assert "reconciler-absent" in kinds
         assert work_status != "completed"
         assert "eff-1" not in ledger
+
+
+@pytest.mark.parametrize("mode,expected_artifact,expected_folded", [
+    ("protected", "merge-c-1+c-2+c-3", ["c-1", "c-2", "c-3"]),
+    ("unsafe", "merge-c-3", ["c-3"]),
+])
+def test_join_folds_published_children(tmp_path, mode, expected_artifact,
+                                       expected_folded):
+    """The merged artifact's identity names the children it folded. The
+    protected run recomputes the fold after the straggler publishes; the
+    unsafe run ends holding the straggler's own partial merge."""
+    _code, ev = _run(tmp_path, "child-completes-after-join", mode)
+    assert ev["external_effects"]["artifact"]["artifact_id"] == expected_artifact
+    assert ev["oracle"]["observed"]["folded_children"] == expected_folded
+    assert ev["oracle"]["expected"]["folded_children"] == ["c-1", "c-2", "c-3"]
+    kinds = [e["kind"] for e in ev["events"]]
+    assert ("join-recomputed" in kinds) == (mode == "protected")
+    assert ("join-recompute-absent" in kinds) == (mode == "unsafe")
+
+
+@pytest.mark.parametrize("mode,expected_kind", [
+    ("protected", "publish-rejected-stale"),
+    ("unsafe", "publish-unfenced-applied"),
+])
+def test_join_fence_decides_the_late_merge_write(tmp_path, mode, expected_kind):
+    """The straggler's write into the merge slot carries join generation 1
+    after ownership advanced to 2. The fence is the only thing that stops it,
+    and the fold recomputation is a separate protection: this asserts the
+    fence half on its own."""
+    _code, ev = _run(tmp_path, "child-completes-after-join", mode)
+    late = [e for e in ev["events"]
+            if e.get("kind") == expected_kind
+            and e.get("work_id") == "w-1"
+            and e.get("generation") == 1]
+    assert late, f"no {expected_kind} for the generation-1 merge write"
+    # The straggler's own work item completes in both arms; only its write to
+    # the parent's merge slot is fenced.
+    assert ev["authoritative_state"]["work_items"]["c-3"]["status"] == "completed"
+
+
+def test_join_refuses_to_fire_over_an_undispositioned_child():
+    """Control run with no fault injected: the straggler still holds its lease
+    and has published nothing, so it is undispositioned and the join must
+    report incomplete rather than fold around it."""
+    adapter = InMemoryAdapter()
+    for command in (
+        {"op": "seed", "params": {"scenario": "child-completes-after-join",
+                                  "mode": "protected"}},
+        {"op": "start"},
+        {"op": "wait_for_barrier", "params": {"name": "before-join"}},
+        {"op": "wait_for_barrier", "params": {"name": "run-complete"}},
+    ):
+        assert adapter.handle(command)["ok"] is True, command
+    events = adapter.handle({"op": "collect_evidence"})["data"]["events"]
+    incomplete = [e for e in events if e["kind"] == "join-incomplete"]
+    assert incomplete, "the join folded a set containing an undispositioned child"
+    assert incomplete[0]["undispositioned"] == ["c-3"]
+    assert "join-published" not in [e["kind"] for e in events]
+
+
+def test_dispositions_are_derived_from_child_evidence():
+    """published needs both the completion record and the destination
+    mutation; a child with neither and no lease is blocked; a child still
+    holding its lease with nothing published is undispositioned."""
+    from adapters.in_memory.model import Factory
+    f = Factory("dedup", "fenced", True)
+    for child in ("c-1", "c-2", "c-3"):
+        f.add_work(child, generation=1)
+        f.claim_work(child, attempt=1)
+    f.start_worker("worker-1")
+    f.launch_session("c-1", "worker-1", attempt=1)
+    f.apply_effect("c-1", "sess-1", "eff-c-1", "payload", attempt=1)
+    f.complete_work("c-1", "sess-1", attempt=1, generation=1)
+    f.expire_lease("c-2")
+    assert f.derive_dispositions(["c-1", "c-2", "c-3"]) == {
+        "c-1": "published", "c-2": "blocked", "c-3": "undispositioned"}
+    # A completion with no mutation at the destination is a self-report, and
+    # must not count as published.
+    f.complete_work("c-3", "sess-1", attempt=1, generation=1)
+    assert f.derive_dispositions(["c-3"]) == {"c-3": "undispositioned"}
 
 
 @pytest.mark.parametrize("drill,mode", COMBOS)
@@ -240,7 +337,7 @@ def test_oracles_error_on_vacuous_evidence():
     the dangerous operation; the original oracles did."""
     from adapters.in_memory.run_drill import (
         _oracle_worker_dies, _oracle_stale_writer, _oracle_effect_ack,
-        _oracle_event_lost)
+        _oracle_event_lost, _oracle_child_after_join)
     vacuous = {
         "events": [],
         "authoritative_state": {
@@ -252,7 +349,8 @@ def test_oracles_error_on_vacuous_evidence():
                              "artifact": {"artifact_id": "artifact-g8"}},
     }
     for oracle in (_oracle_worker_dies, _oracle_stale_writer,
-                   _oracle_effect_ack, _oracle_event_lost):
+                   _oracle_effect_ack, _oracle_event_lost,
+                   _oracle_child_after_join):
         verdict = oracle(vacuous)["verdict"]
         assert verdict == "error", f"{oracle.__name__} returned {verdict}"
 

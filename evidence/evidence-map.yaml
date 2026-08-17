@@ -12,7 +12,7 @@
 # An inference entry is a design bet, never an established result.
 
 version: 1
-updated: "2026-08-09"
+updated: "2026-08-16"
 
 patterns:
   stable-work-identity:
@@ -248,6 +248,59 @@ patterns:
         is ours; no end-to-end demonstration exists yet.
       basis: inference
       source: "this kit's cross-repo-campaigns pattern and the campaign-coverage-loop diagram"
+
+  fan-out-fan-in:
+    - claim: >-
+        Splitting work and synchronizing it back are named control-flow
+        patterns with their own correctness conditions; a join is a
+        specified construct, not an incidental wait.
+      basis: foundational
+      source: "van der Aalst et al. 2003, Workflow Patterns (synchronization, structured synchronizing merge)"
+    - claim: >-
+        Fencing tokens checked at the resource, not at the caller, are what
+        stop a writer that wakes after its lease expired; applied to a
+        fan-in, the token is the parent's join generation.
+      basis: foundational
+      source: "Kleppmann 2017, Designing Data-Intensive Applications, ch. 8"
+    - claim: >-
+        37 open or in-progress workflow markers existed for work that had
+        fanned out and never joined, the oldest 87 days, with a
+        six-molecule cluster acting as live respawn-loop fuel.
+      basis: local-observation
+      source: gascity2026:docs/dr-61j-stranded-molecule-inventory-2026-07-14.md
+    - claim: >-
+        Before a landing reaper existed, closed-but-never-merged branches
+        stranded at roughly 12 per day, so a join summing child status
+        fields would report coverage the artifacts never had.
+      basis: local-observation
+      source: gascity2026:docs/gc-4zf-track-a-reliability-surface-map-2026-07-16.md
+    - claim: >-
+        Both unsafe systems accepted four obsolete generation-7 actions
+        after generation 9 became current and both fenced systems accepted
+        zero, over 30 publication pairs per system.
+      basis: local-observation
+      source: temporallab2026:docs/guarantees.md
+    - claim: >-
+        All 18 unsafe trials applied the external effect twice under one
+        recorded completion, so a join that recomputes its roster and
+        re-dispatches inherits that arithmetic once per recomputation
+        unless each child carries a stable effect identity.
+      basis: local-observation
+      source: temporallab2026:docs/guarantees.md
+    - claim: >-
+        Metadata written to the wrong rig left about 40 orphan worktrees
+        and 1384 false worktree-recorded audit events, so a reducer reading
+        that log would count successes that never happened.
+      basis: local-observation
+      source: gascity2026:docs/design/city-reliability-surface.md
+    - claim: >-
+        A fan-in expressed as a fold whose result carries the folded child
+        set, with the merged artifact's identity derived from that set and
+        the parent's join generation fencing the merge slot at the
+        destination. The components are observed; this composition is
+        demonstrated only against the in-memory simulator.
+      basis: inference
+      source: "this kit's fan-out-fan-in pattern and the child-completes-after-join drill"
 
   promise-oriented-observability:
     - claim: >-

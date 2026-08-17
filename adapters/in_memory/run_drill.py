@@ -5,7 +5,7 @@ Usage:
         [--out-dir out/evidence]
 
 Drills: worker-dies-agent-survives, stale-writer-completes,
-effect-commits-ack-is-lost, event-is-lost.
+effect-commits-ack-is-lost, event-is-lost, child-completes-after-join.
 
 Exit codes:
     0  protected mode and the oracle passed
@@ -34,7 +34,8 @@ from pathlib import Path
 if __package__ in (None, ""):  # pragma: no cover - script-invocation path
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from adapters.in_memory.adapter import EFFECT_ID, WORK_ID, InMemoryAdapter
+from adapters.in_memory.adapter import (CHILD_IDS, EFFECT_ID, STRAGGLER_ID,
+                                        WORK_ID, InMemoryAdapter)
 
 
 class DrillError(Exception):
@@ -267,12 +268,86 @@ def _oracle_event_lost(evidence: dict) -> dict:
     }
 
 
+def _oracle_child_after_join(evidence: dict) -> dict:
+    """The merged artifact at the destination folds exactly the children whose
+    own evidence says published. The verdict only counts if the log shows the
+    written-off child returning after the join fired and writing into the merge
+    slot; a correct-looking merge with no straggler on record proves nothing.
+
+    Published is recomputed here from the child's own evidence (its completion
+    record plus its mutation at the destination) rather than read back from the
+    factory's disposition log, so the oracle does not inherit the belief it is
+    checking."""
+    events = evidence["events"]
+    state = evidence["authoritative_state"]
+    effects = evidence["external_effects"]
+    description = ("The straggler was written off, the join published a merge, "
+                   "the straggler then completed and wrote into the merge slot, "
+                   "and the merged artifact folds exactly the children whose "
+                   "own evidence says published.")
+    missing = []
+    writeoff_tick = _first_tick(events, "lease-expired", work_id=STRAGGLER_ID)
+    if writeoff_tick is None:
+        missing.append(f"the injected write-off of {STRAGGLER_ID}")
+    join_tick = _first_tick(events, "join-published")
+    if join_tick is None or (writeoff_tick is not None
+                             and join_tick <= writeoff_tick):
+        missing.append("a join publishing after the write-off")
+    straggler_done_tick = _first_tick(events, "outcome-accepted",
+                                      work_id=STRAGGLER_ID)
+    if straggler_done_tick is None or (join_tick is not None
+                                       and straggler_done_tick <= join_tick):
+        missing.append("the straggler completing after the join")
+    late_write_kind = None
+    late_write_tick = None
+    for kind in ("publish-rejected-stale", "publish-unfenced-applied",
+                 "publish-unfenced-skipped", "publish-accepted"):
+        tick = _first_tick(events, kind, work_id=WORK_ID, generation=1)
+        if tick is not None and join_tick is not None and tick > join_tick:
+            late_write_kind = kind
+            late_write_tick = tick
+            break
+    if late_write_tick is None:
+        missing.append("the straggler writing into the merge slot after the join")
+    artifact = effects["artifact"]
+    if artifact is None:
+        missing.append("a merged artifact at the destination")
+    if missing:
+        return _preconditions_failed(missing, "join-folds-published-children",
+                                     description)
+    applied = {m["effect_id"] for m in effects["mutations"]}
+    published = sorted(
+        child for child in CHILD_IDS
+        if state["work_items"].get(child, {}).get("status") == "completed"
+        and f"eff-{child}" in applied)
+    folded = None
+    for event in events:
+        if (event.get("kind") == "merge-prepared"
+                and event.get("artifact_id") == artifact["artifact_id"]):
+            folded = event.get("folded_children")
+    verdict = "error" if folded is None else (
+        "pass" if folded == published else "violation")
+    return {
+        "name": "join-folds-published-children",
+        "description": description,
+        "expected": {"folded_children": published},
+        "observed": {"folded_children": folded,
+                     "artifact": artifact["artifact_id"],
+                     "late_write": late_write_kind},
+        "detail": {"writeoff_tick": writeoff_tick, "join_tick": join_tick,
+                   "straggler_completion_tick": straggler_done_tick,
+                   "late_write_tick": late_write_tick},
+        "verdict": verdict,
+    }
+
+
 @dataclass(frozen=True)
 class DrillSpec:
     barrier: str
     fault_kind: str
     oracle: object
     post_fault_ops: tuple = field(default_factory=tuple)
+    fault_target: str | None = None
 
 
 DRILLS: dict[str, DrillSpec] = {
@@ -296,6 +371,13 @@ DRILLS: dict[str, DrillSpec] = {
         barrier="before-ledger-event",
         fault_kind="drop_event",
         oracle=_oracle_event_lost,
+    ),
+    "child-completes-after-join": DrillSpec(
+        barrier="before-join",
+        fault_kind="expire_lease",
+        oracle=_oracle_child_after_join,
+        post_fault_ops=(("advance_generation", {"work_id": WORK_ID}),),
+        fault_target=STRAGGLER_ID,
     ),
 }
 
@@ -329,11 +411,15 @@ def run_drill(drill: str, mode: str,
             raise DrillError(f"{op} failed: {observation['error']}")
         return observation["data"]
 
+    fault: dict = {"kind": spec.fault_kind, "at_barrier": spec.barrier}
+    if spec.fault_target is not None:
+        fault["target"] = spec.fault_target
+
     try:
         send("seed", scenario=drill, mode=mode)
         send("start")
         send("wait_for_barrier", name=spec.barrier)
-        send("inject_fault", kind=spec.fault_kind, at_barrier=spec.barrier)
+        send("inject_fault", **fault)
         for op, params in spec.post_fault_ops:
             send(op, **params)
         send("wait_for_barrier", name="run-complete")
@@ -350,7 +436,7 @@ def run_drill(drill: str, mode: str,
         "scenario": drill,
         "mode": mode,
         "barrier": spec.barrier,
-        "fault": {"kind": spec.fault_kind, "at_barrier": spec.barrier},
+        "fault": fault,
         "barriers_reached": coverage["barriers_reached"],
         "campaign_coverage": coverage,
         "events": record["events"],
