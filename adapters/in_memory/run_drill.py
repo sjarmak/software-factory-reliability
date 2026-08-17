@@ -6,7 +6,8 @@ Usage:
 
 Drills: worker-dies-agent-survives, stale-writer-completes,
 effect-commits-ack-is-lost, event-is-lost, child-completes-after-join,
-request-accepted-effect-never-applied.
+request-accepted-effect-never-applied,
+source-advances-view-answers-anyway.
 
 Exit codes:
     0  protected mode and the oracle passed
@@ -36,7 +37,8 @@ if __package__ in (None, ""):  # pragma: no cover - script-invocation path
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from adapters.in_memory.adapter import (CHILD_IDS, EFFECT_ID, REQUEST_ID,
-                                        STRAGGLER_ID, WORK_ID, InMemoryAdapter)
+                                        STRAGGLER_ID, VIEW_ID, WORK_ID,
+                                        InMemoryAdapter)
 
 
 class DrillError(Exception):
@@ -419,6 +421,109 @@ def _oracle_request_never_applied(evidence: dict) -> dict:
     }
 
 
+def _oracle_stale_view(evidence: dict) -> dict:
+    """Two checks over one derived view that fell behind its source.
+
+    The answer: a query outcome that claims a complete result set must not
+    be returned when the destination holds the queried record and the view
+    does not. The surface: a health verdict of fresh must not be reported
+    when the view's published position is further behind the source than
+    its declared contract allows.
+
+    Both are recomputed here from the destination snapshot, the view's
+    entry list, and the view's published position, so the oracle does not
+    inherit either surface's belief. They are independent by construction:
+    the first never reads a position and the second never reads an entry,
+    so neither can carry the other. The verdict only counts if the log
+    shows the view current at the barrier, the source advancing, the
+    index-update actually dropped, and both surfaces answering afterwards.
+    """
+    events = evidence["events"]
+    state = evidence["authoritative_state"]
+    effects = evidence["external_effects"]
+    description = ("The view consumed the source's first record, the source "
+                   "advanced, the index-update was dropped, and both the "
+                   "query and the health surface answered afterwards: "
+                   "neither claims a complete result nor a fresh view while "
+                   "the view is behind the source.")
+    missing = []
+    indexed_tick = _first_tick(events, "view-indexed", effect_id="eff-0")
+    if indexed_tick is None:
+        missing.append("the view consuming the source's first record")
+    fault_tick = _first_tick(events, "fault-injected")
+    write_tick = _first_tick(events, "effect-applied", effect_id=EFFECT_ID)
+    if write_tick is None or (fault_tick is not None
+                              and write_tick <= fault_tick):
+        missing.append("a source write after the fault injection")
+    drop_tick = _first_tick(events, "index-update-dropped",
+                            effect_id=EFFECT_ID)
+    if drop_tick is None or (write_tick is not None
+                             and drop_tick <= write_tick):
+        missing.append("the dropped index-update for that write")
+    query_tick = _first_tick(events, "view-queried", term=EFFECT_ID)
+    if query_tick is None or (drop_tick is not None
+                              and query_tick <= drop_tick):
+        missing.append("a query for that record after the drop")
+    health_tick = _first_tick(events, "view-health-reported", view_id=VIEW_ID)
+    if health_tick is None or (query_tick is not None
+                               and health_tick <= query_tick):
+        missing.append("a health report after the query")
+    if missing:
+        return _preconditions_failed(missing, "view-answers-within-its-lag",
+                                     description)
+
+    view = state.get("views", {}).get(VIEW_ID, {})
+    entries = view.get("entries", [])
+    at_source = EFFECT_ID in {m["effect_id"] for m in effects["mutations"]}
+    in_view = EFFECT_ID in entries
+    query = [e for e in events
+             if e.get("kind") == "view-queried" and e.get("term") == EFFECT_ID]
+    query_outcome = query[-1].get("outcome") if query else None
+    # The answer rail reads entries against the destination and never a
+    # position, so a view that advanced its position without indexing the
+    # record still fails it.
+    answer_truthful = not (query_outcome == "results-complete"
+                           and at_source and not in_view)
+
+    consumed = view.get("consumed_position")
+    source_position = len(effects["mutations"])
+    lag = None if consumed is None else source_position - consumed
+    max_lag = view.get("max_lag")
+    health = [e for e in events
+              if e.get("kind") == "view-health-reported"
+              and e.get("view_id") == VIEW_ID]
+    health_state = health[-1].get("state") if health else None
+    health_basis = health[-1].get("basis") if health else None
+    behind = lag is None or max_lag is None or lag > max_lag
+    health_agrees = not (health_state == "fresh" and behind)
+
+    if query_outcome is None or health_state is None:
+        verdict = "error"
+    else:
+        verdict = ("pass" if (answer_truthful and health_agrees)
+                   else "violation")
+    return {
+        "name": "view-answers-within-its-lag",
+        "description": description,
+        "expected": {"complete_result_over_a_record_the_view_lacks": False,
+                     "fresh_health_while_behind_contract": False},
+        "observed": {"query_outcome": query_outcome,
+                     "record_at_source": at_source,
+                     "record_in_view": in_view,
+                     "health_state": health_state,
+                     "health_basis": health_basis,
+                     "consumed_position": consumed,
+                     "source_position": source_position,
+                     "lag": lag, "max_lag": max_lag},
+        "detail": {"indexed_tick": indexed_tick, "write_tick": write_tick,
+                   "drop_tick": drop_tick, "query_tick": query_tick,
+                   "health_tick": health_tick,
+                   "answer_truthful": answer_truthful,
+                   "health_agrees": health_agrees},
+        "verdict": verdict,
+    }
+
+
 @dataclass(frozen=True)
 class DrillSpec:
     barrier: str
@@ -461,6 +566,11 @@ DRILLS: dict[str, DrillSpec] = {
         barrier="request-accepted",
         fault_kind="drop_event",
         oracle=_oracle_request_never_applied,
+    ),
+    "source-advances-view-answers-anyway": DrillSpec(
+        barrier="view-current",
+        fault_kind="drop_event",
+        oracle=_oracle_stale_view,
     ),
 }
 

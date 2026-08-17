@@ -1,8 +1,8 @@
-"""Pytest coverage for the six in-memory drills in both modes.
+"""Pytest coverage for the seven in-memory drills in both modes.
 
 Each drill-mode pair is run through the callable API (run_drill) for
-speed; exit codes and evidence-file invariants are asserted for all twelve
-combinations, plus determinism and protocol-validation checks.
+speed; exit codes and evidence-file invariants are asserted for all
+fourteen combinations, plus determinism and protocol-validation checks.
 """
 
 from __future__ import annotations
@@ -32,6 +32,7 @@ EXPECTED_BARRIER = {
     "event-is-lost": "before-ledger-event",
     "child-completes-after-join": "before-join",
     "request-accepted-effect-never-applied": "request-accepted",
+    "source-advances-view-answers-anyway": "view-current",
 }
 # Full fault records: a targeted fault carries the target it was aimed at, so
 # the evidence names which lease expired rather than leaving it to the log.
@@ -42,6 +43,7 @@ EXPECTED_FAULT = {
     "event-is-lost": {"kind": "drop_event"},
     "child-completes-after-join": {"kind": "expire_lease", "target": "c-3"},
     "request-accepted-effect-never-applied": {"kind": "drop_event"},
+    "source-advances-view-answers-anyway": {"kind": "drop_event"},
 }
 # Work items each scenario seeds, in identity_snapshot order (sorted).
 EXPECTED_WORK_IDS = {
@@ -51,6 +53,7 @@ EXPECTED_WORK_IDS = {
     "event-is-lost": ["w-1"],
     "child-completes-after-join": ["c-1", "c-2", "c-3", "w-1"],
     "request-accepted-effect-never-applied": ["w-1"],
+    "source-advances-view-answers-anyway": ["w-1"],
 }
 COMBOS = [(drill, mode) for drill in sorted(DRILLS) for mode in MODES]
 
@@ -343,6 +346,112 @@ def test_dispatch_classification_ignores_the_destination():
     assert f.classify_by_readback("req-1") == "requested-and-queued"
 
 
+@pytest.mark.parametrize("mode,expected_outcome,expected_basis", [
+    ("protected", "lag-exceeded", "published-position-compared-to-source"),
+    ("unsafe", "results-complete", "index-contents-only"),
+])
+def test_stale_view_answers_within_its_lag(tmp_path, mode, expected_outcome,
+                                           expected_basis):
+    """One record reached the destination and never reached the view. The
+    unsafe arm returns a complete result set holding none of it, which is a
+    false absence; the protected arm names the gap instead of answering."""
+    _code, ev = _run(tmp_path, "source-advances-view-answers-anyway", mode)
+    kinds = [e["kind"] for e in ev["events"]]
+    assert "index-update-dropped" in kinds
+    assert len([e for e in ev["events"] if e["kind"] == "view-indexed"]) == 1
+
+    view = ev["authoritative_state"]["views"]["view-1"]
+    assert view["consumed_position"] == 1
+    assert view["source_position"] == 2
+    assert view["entries"] == ["eff-0"]
+    assert "eff-1" in {m["effect_id"]
+                       for m in ev["external_effects"]["mutations"]}
+
+    query = [e for e in ev["events"] if e["kind"] == "view-queried"]
+    assert len(query) == 1
+    assert query[0]["outcome"] == expected_outcome
+    assert query[0]["basis"] == expected_basis
+    # The unsafe arm's answer is an empty list, not a refusal: a caller
+    # cannot tell it apart from the record not existing.
+    assert query[0]["matches"] == ([] if mode == "unsafe" else None)
+
+
+@pytest.mark.parametrize("mode,expected_state,expected_lag", [
+    ("protected", "stale", 1),
+    ("unsafe", "fresh", None),
+])
+def test_stale_view_health_surface(tmp_path, mode, expected_state,
+                                   expected_lag):
+    """The health surface is asserted apart from the query outcome, so
+    neither check can carry the other. Same view, same tick, two verdicts:
+    the liveness surface reports fresh because the indexer ran."""
+    _code, ev = _run(tmp_path, "source-advances-view-answers-anyway", mode)
+    health = [e for e in ev["events"] if e["kind"] == "view-health-reported"]
+    assert len(health) == 1
+    assert health[0]["state"] == expected_state
+    assert health[0]["lag"] == expected_lag
+    assert ev["oracle"]["detail"]["health_agrees"] is (mode == "protected")
+    assert ev["oracle"]["detail"]["answer_truthful"] is (mode == "protected")
+
+
+def test_view_query_reaches_every_outcome():
+    """All three query outcomes come from the same call. A view that has
+    never published a position is lag-unknown, which is a third state and
+    not a slow version of fresh."""
+    from adapters.in_memory.model import Factory, VIEW_QUERY_OUTCOMES
+    f = Factory("dedup", "fenced", True)
+    f.add_work("w-1", generation=1)
+    f.start_worker("worker-1")
+    f.claim_work("w-1", attempt=1)
+    f.launch_session("w-1", "worker-1", attempt=1)
+    f.add_view("view-1", max_lag=0)
+
+    assert f.query_view_lag_checked("view-1", "eff-a")["outcome"] == (
+        "lag-unknown")
+
+    f.apply_effect("w-1", "sess-1", "eff-a", "payload-a", attempt=1)
+    f.index_view_entry("view-1", "eff-a")
+    answered = f.query_view_lag_checked("view-1", "eff-a")
+    assert answered["outcome"] == "results-complete"
+    assert answered["matches"] == ["eff-a"]
+
+    f.apply_effect("w-1", "sess-1", "eff-b", "payload-b", attempt=1)
+    behind = f.query_view_lag_checked("view-1", "eff-b")
+    assert behind["outcome"] == "lag-exceeded"
+    assert behind["lag"] == 1 and behind["required_lag"] == 0
+    # A caller willing to read one position behind gets an answer, and the
+    # answer is still wrong about eff-b: the contract bounds the staleness
+    # it accepts, it does not make the missing record appear.
+    tolerant = f.query_view_lag_checked("view-1", "eff-b", max_lag=1)
+    assert tolerant["outcome"] == "results-complete"
+    assert tolerant["matches"] == []
+
+    outcomes = {e["outcome"] for e in f.events if e["kind"] == "view-queried"}
+    assert outcomes == set(VIEW_QUERY_OUTCOMES)
+
+
+def test_liveness_health_cannot_report_a_lag():
+    """The unsafe health surface's defect in isolation: it calls a view
+    fresh from the fact that its indexer started, on a state where the
+    position comparison already says stale."""
+    from adapters.in_memory.model import Factory
+    f = Factory("dedup", "fenced", True)
+    f.add_work("w-1", generation=1)
+    f.start_worker("worker-1")
+    f.claim_work("w-1", attempt=1)
+    f.launch_session("w-1", "worker-1", attempt=1)
+    f.add_view("view-1", max_lag=0)
+    f.apply_effect("w-1", "sess-1", "eff-a", "payload-a", attempt=1)
+    f.index_view_entry("view-1", "eff-a")
+    f.apply_effect("w-1", "sess-1", "eff-b", "payload-b", attempt=1)
+
+    by_position = f.view_health_by_position("view-1")
+    by_liveness = f.view_health_by_liveness("view-1")
+    assert by_position["state"] == "stale" and by_position["lag"] == 1
+    assert by_liveness["state"] == "fresh" and by_liveness["lag"] is None
+    assert by_position["basis"] != by_liveness["basis"]
+
+
 @pytest.mark.parametrize("drill,mode", COMBOS)
 def test_determinism(tmp_path, drill, mode):
     dir_a = tmp_path / "a"
@@ -438,7 +547,7 @@ def test_oracles_error_on_vacuous_evidence():
     from adapters.in_memory.run_drill import (
         _oracle_worker_dies, _oracle_stale_writer, _oracle_effect_ack,
         _oracle_event_lost, _oracle_child_after_join,
-        _oracle_request_never_applied)
+        _oracle_request_never_applied, _oracle_stale_view)
     vacuous = {
         "events": [],
         "authoritative_state": {
@@ -451,7 +560,8 @@ def test_oracles_error_on_vacuous_evidence():
     }
     for oracle in (_oracle_worker_dies, _oracle_stale_writer,
                    _oracle_effect_ack, _oracle_event_lost,
-                   _oracle_child_after_join, _oracle_request_never_applied):
+                   _oracle_child_after_join, _oracle_request_never_applied,
+                   _oracle_stale_view):
         verdict = oracle(vacuous)["verdict"]
         assert verdict == "error", f"{oracle.__name__} returned {verdict}"
 

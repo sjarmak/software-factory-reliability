@@ -16,6 +16,12 @@ which returns an outcome for a request. Its two classification paths
 (classify_by_readback and classify_by_dispatch) are the difference between
 reporting the destination and reporting one's own dispatch.
 
+A fifth sits beside the ledger: a derived view (an index, cache, or
+projection) built by consuming the source's history over the same droppable
+delivery layer. Its two query paths (query_view_lag_checked and
+query_view_index_only) are the difference between an answer bounded by the
+view's distance from the source and an answer bounded by nothing.
+
 Basis note: the layer split mirrors the guarantee split observed in the
 Temporal experiment series (local observation,
 temporallab2026:docs/guarantees.md): completion cardinality at the
@@ -82,6 +88,25 @@ class Mutation:
 
 
 @dataclass
+class DerivedView:
+    """A read model built by consuming the source's ordered history.
+
+    consumed_position is the published position: how far into the source's
+    history this view has been updated. None means the view publishes no
+    position at all, which is a different state from being current and is
+    why the field is nullable rather than defaulted to zero. max_lag is the
+    freshness contract the view declares to its readers, in source
+    positions.
+    """
+
+    view_id: str
+    max_lag: int = 0
+    consumed_position: int | None = None
+    entries: list[str] = field(default_factory=list)
+    indexer_started: bool = False
+
+
+@dataclass
 class Request:
     """One request as it crosses a command boundary.
 
@@ -111,6 +136,15 @@ TERMINAL_OUTCOMES = (
     "requested-and-applied",
     "rejected-before-mutation",
     "failed-after-mutation",
+)
+
+# Outcomes a query against a derived view can return. results-complete is
+# the only one that answers the question; the other two say why the view
+# cannot answer it within the freshness the query requires.
+VIEW_QUERY_OUTCOMES = (
+    "results-complete",
+    "lag-exceeded",
+    "lag-unknown",
 )
 
 
@@ -190,6 +224,7 @@ class Factory:
         self.workers: dict[str, Worker] = {}
         self.effect_ledger: dict[str, dict] = {}
         self.requests: dict[str, Request] = {}
+        self.views: dict[str, DerivedView] = {}
         self.attempt_sessions: dict[int, str] = {}
         self.bus = EventBus()
         self.destination = Destination(destination_semantics)
@@ -200,6 +235,7 @@ class Factory:
         self.effect_ids: list[str] = []
         self.artifact_ids: list[str] = []
         self.request_ids: list[str] = []
+        self.view_ids: list[str] = []
         self.generations_seen: list[int] = []
 
     def log(self, event_kind: str, /, **detail) -> None:
@@ -410,6 +446,122 @@ class Factory:
                  reason=reason)
         return record
 
+    # derived views
+
+    def source_position(self) -> int:
+        """How far the source of truth has advanced.
+
+        Derived from the destination's own mutation list on every call, so
+        the source position cannot drift from the source. A view's position
+        is a claim the view makes; this one is a count of what exists.
+        """
+        return len(self.destination.mutations)
+
+    def add_view(self, view_id: str, max_lag: int = 0) -> DerivedView:
+        view = DerivedView(view_id=view_id, max_lag=max_lag)
+        self.views[view_id] = view
+        self._note(self.view_ids, view_id)
+        self.log("view-added", view_id=view_id, max_lag=max_lag)
+        return view
+
+    def index_view_entry(self, view_id: str, effect_id: str) -> DerivedView:
+        """Consume one source record into the view.
+
+        The entry and the published position advance together here. A real
+        indexer that advances its position without writing the entry would
+        satisfy every position check while answering queries wrongly, which
+        is why the query oracle recounts entries against the destination
+        rather than trusting the position.
+        """
+        view = self.views[view_id]
+        view.indexer_started = True
+        if effect_id not in view.entries:
+            view.entries.append(effect_id)
+        view.consumed_position = self.source_position()
+        self.log("view-indexed", view_id=view_id, effect_id=effect_id,
+                 consumed_position=view.consumed_position,
+                 source_position=self.source_position())
+        return view
+
+    def view_lag(self, view_id: str) -> int | None:
+        """Source position minus published position, or None if the view
+        publishes no position."""
+        view = self.views[view_id]
+        if view.consumed_position is None:
+            return None
+        return self.source_position() - view.consumed_position
+
+    def query_view_lag_checked(self, view_id: str, term: str,
+                               max_lag: int | None = None) -> dict:
+        """Answer a query only within the freshness the caller requires.
+
+        The requirement defaults to the view's declared contract. A query
+        that cannot be answered within it returns lag-exceeded carrying both
+        positions, rather than the subset of the source the view happens to
+        hold.
+        """
+        view = self.views[view_id]
+        required = view.max_lag if max_lag is None else max_lag
+        lag = self.view_lag(view_id)
+        matches = [e for e in view.entries if e == term]
+        if lag is None:
+            outcome, answered = "lag-unknown", None
+        elif lag > required:
+            outcome, answered = "lag-exceeded", None
+        else:
+            outcome, answered = "results-complete", matches
+        self.log("view-queried", view_id=view_id, term=term, outcome=outcome,
+                 basis="published-position-compared-to-source",
+                 matches=answered, lag=lag, required_lag=required,
+                 consumed_position=view.consumed_position,
+                 source_position=self.source_position())
+        return {"outcome": outcome, "matches": answered, "lag": lag,
+                "required_lag": required}
+
+    def query_view_index_only(self, view_id: str, term: str) -> dict:
+        """Answer from whatever the view holds (the unsafe path).
+
+        Nothing here reads the source position, so the result set is
+        complete with respect to the index and says nothing about the
+        source. An empty answer is returned as a successful absence.
+        """
+        view = self.views[view_id]
+        matches = [e for e in view.entries if e == term]
+        self.log("view-queried", view_id=view_id, term=term,
+                 outcome="results-complete", basis="index-contents-only",
+                 matches=matches, lag=None, required_lag=None,
+                 consumed_position=view.consumed_position,
+                 source_position=self.source_position())
+        return {"outcome": "results-complete", "matches": matches,
+                "lag": None, "required_lag": None}
+
+    def view_health_by_position(self, view_id: str) -> dict:
+        """Report freshness from the same two positions the query path uses."""
+        view = self.views[view_id]
+        lag = self.view_lag(view_id)
+        if lag is None:
+            state = "unknown"
+        else:
+            state = "fresh" if lag <= view.max_lag else "stale"
+        record = {"view_id": view_id, "state": state, "lag": lag,
+                  "basis": "published-position-compared-to-source"}
+        self.log("view-health-reported", **record)
+        return record
+
+    def view_health_by_liveness(self, view_id: str) -> dict:
+        """Report freshness from the indexer running (the unsafe path).
+
+        This surface never computes a lag, so it cannot report one. It is
+        the second indicator that disagrees with the first while both look
+        like health.
+        """
+        view = self.views[view_id]
+        state = "fresh" if view.indexer_started else "unknown"
+        record = {"view_id": view_id, "state": state, "lag": None,
+                  "basis": "indexer-liveness"}
+        self.log("view-health-reported", **record)
+        return record
+
     # destination operations
 
     def apply_effect(self, work_id: str, session_id: str, effect_id: str,
@@ -564,6 +716,14 @@ class Factory:
                       "terminal": dict(r.terminal) if r.terminal else None}
                 for rid, r in self.requests.items()
             },
+            "views": {
+                vid: {"view_id": v.view_id, "max_lag": v.max_lag,
+                      "consumed_position": v.consumed_position,
+                      "entries": list(v.entries),
+                      "indexer_started": v.indexer_started,
+                      "source_position": self.source_position()}
+                for vid, v in self.views.items()
+            },
         }
 
     def effects_snapshot(self) -> dict:
@@ -602,6 +762,7 @@ class Factory:
             "effect_ids": list(self.effect_ids),
             "artifact_ids": list(self.artifact_ids),
             "request_ids": list(self.request_ids),
+            "view_ids": list(self.view_ids),
             "mutation_ids": [m.mutation_id for m in self.destination.mutations],
             "receipt_ids": [m.receipt for m in self.destination.mutations],
             "attempt_to_session": {

@@ -426,3 +426,78 @@ patterns:
         simulator.
       basis: inference
       source: "this kit's postcondition-typed-outcomes pattern and the request-accepted-effect-never-applied drill"
+
+  lag-bounded-reads:
+    - claim: >-
+        A replica that lags its source violates read-your-writes and
+        monotonic reads, and the standard remedy is to route a read by the
+        freshness it requires rather than to treat all reads alike.
+      basis: foundational
+      source: "Kleppmann 2017, Designing Data-Intensive Applications, ch. 5"
+    - claim: >-
+        Five friction records were written by one agent inside a 46 minute
+        window on 2026-08-16, all naming the same cause: prior-session
+        search over a shared lexical index was unusable because the index
+        was months behind, and the fallback was manual reconstruction from
+        other stores. They are five recordings of one encounter, not five
+        independent encounters.
+      basis: local-observation
+      source: "gascity2026:.papercuts.jsonl (pc_843e91e18367, pc_3f2f2d85ca18, pc_f6c929da6db5, pc_0bb3136d0c73, pc_9d506c39742a)"
+    - claim: >-
+        Health reported the index stale with a last-indexed date of
+        2026-04-22 while an exact search for a known term returned zero
+        hits. The freshness signal existed and was not on the query path,
+        so the search returned an ordinary empty result set.
+      basis: local-observation
+      source: "gascity2026:.papercuts.jsonl (pc_9d506c39742a)"
+    - claim: >-
+        One rebuild printed "index completed" and then "index failed: out
+        of memory" in the same run, after which one diagnostic reported
+        "Index Status: OK" while the health command reported "index stale"
+        and exited 1. Both were partly right and untangling them cost about
+        fifteen minutes: the historical corpus was searchable while the
+        most recently ingested month never reached the lexical index.
+      basis: local-observation
+      source: "gascity2026:.papercuts.jsonl (pc_d89449dbe4e5)"
+    - claim: >-
+        The same view answered 36886 matches for a probe term from the old
+        corpus and zero for a phrase from 2026-08-08, so a partial ingest
+        left the view's apparent progress ahead of its contents.
+      basis: local-observation
+      source: "gascity2026:.papercuts.jsonl (pc_d89449dbe4e5)"
+    - claim: >-
+        The expensive failure class is a success-shaped no-op, partial
+        mutation, false empty result, stale assignment, or missing delivery
+        receipt. The recommended remedies for the store boundary are a
+        health command that proves a current read/write round trip rather
+        than checking that a process or job is running, and never printing
+        an empty result as a successful absence when the query itself was
+        not trustworthy.
+      basis: local-observation
+      source: gascity2026:.gc-reports/gc-tooling-ergonomics-2026-08-17.md
+    - claim: >-
+        A load-bearing claim about system state must carry the command that
+        would refute it, and that command must be the one that can refute
+        the claim rather than a related one, because a claim that was true
+        when written is indistinguishable from one that is true now at
+        every site except the one that re-measures.
+      basis: local-observation
+      source: gascity2026:CLAUDE.md
+    - claim: >-
+        A freshness check selected, by accident of directory order, the one
+        file in the tree that cannot change while the server is running,
+        and reported static over a window in which a live database was
+        being written. The instrument inverted on exactly the case it
+        existed to catch.
+      basis: local-observation
+      source: gascity2026:CLAUDE.md
+    - claim: >-
+        A derived view publishing its consumed position, answering only
+        within a declared freshness contract measured against a source
+        position recomputed from the source, returning lag-exceeded or
+        lag-unknown instead of a smaller result set, and computing every
+        health surface from those same two positions. The failure shapes
+        are observed; this composition executes only against the in-memory
+        simulator.
+      basis: inference
+      source: "this kit's lag-bounded-reads pattern and the source-advances-view-answers-anyway drill"

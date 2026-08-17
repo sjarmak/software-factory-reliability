@@ -29,7 +29,9 @@ _COMMAND_VALIDATOR = jsonschema.Draft202012Validator(
 
 WORK_ID = "w-1"
 EFFECT_ID = "eff-1"
+PRIOR_EFFECT_ID = "eff-0"
 REQUEST_ID = "req-1"
+VIEW_ID = "view-1"
 CHILD_IDS = ("c-1", "c-2", "c-3")
 STRAGGLER_ID = "c-3"
 MODES = ("protected", "unsafe")
@@ -40,6 +42,7 @@ SCENARIOS = (
     "event-is-lost",
     "child-completes-after-join",
     "request-accepted-effect-never-applied",
+    "source-advances-view-answers-anyway",
 )
 
 
@@ -351,6 +354,61 @@ def _script_request_never_applied(f: Factory, mode: str) -> list:
     ]
 
 
+def _script_view_lag(f: Factory, mode: str) -> list:
+    """The view consumes the source's first record and is current at the
+    barrier. The source then advances and the index-update carrying that
+    record is dropped, so the view holds a strict prefix of the source. The
+    protected reader compares the view's published position against the
+    source and refuses to answer an exact lookup it cannot answer freshly;
+    the unsafe reader answers from the index alone and returns an empty
+    result set as a successful absence. The two health surfaces differ the
+    same way: one recomputes the lag, the other reports that the indexer
+    ran."""
+
+    def seed_and_index():
+        f.claim_work(WORK_ID, attempt=1)
+        f.launch_session(WORK_ID, "worker-1", attempt=1)
+        f.apply_effect(WORK_ID, f.attempt_sessions[1], PRIOR_EFFECT_ID,
+                       "payload-0", attempt=1)
+
+        def apply():
+            f.index_view_entry(VIEW_ID, PRIOR_EFFECT_ID)
+        f.emit_event("index-update", apply, view_id=VIEW_ID,
+                     effect_id=PRIOR_EFFECT_ID)
+
+    def source_write():
+        f.apply_effect(WORK_ID, f.attempt_sessions[1], EFFECT_ID,
+                       "payload-1", attempt=1)
+
+    def index_update():
+        def apply():
+            f.index_view_entry(VIEW_ID, EFFECT_ID)
+        f.emit_event("index-update", apply, view_id=VIEW_ID,
+                     effect_id=EFFECT_ID)
+
+    def query_view():
+        if mode == "protected":
+            f.query_view_lag_checked(VIEW_ID, EFFECT_ID)
+        else:
+            f.query_view_index_only(VIEW_ID, EFFECT_ID)
+
+    def report_health():
+        if mode == "protected":
+            f.view_health_by_position(VIEW_ID)
+        else:
+            f.view_health_by_liveness(VIEW_ID)
+
+    return [
+        ("action", "seed-and-index", seed_and_index),
+        ("barrier", "view-current", None),
+        ("action", "source-write", source_write),
+        ("action", "index-update", index_update),
+        ("action", "query-view", query_view),
+        ("action", "report-health", report_health),
+        ("barrier", "run-complete", None),
+    ]
+
+
 _SCRIPT_BUILDERS = {
     "worker-dies-agent-survives": _script_worker_dies,
     "stale-writer-completes": _script_stale_writer,
@@ -358,6 +416,7 @@ _SCRIPT_BUILDERS = {
     "event-is-lost": _script_event_lost,
     "child-completes-after-join": _script_child_after_join,
     "request-accepted-effect-never-applied": _script_request_never_applied,
+    "source-advances-view-answers-anyway": _script_view_lag,
 }
 
 
@@ -414,6 +473,10 @@ class InMemoryAdapter:
         if scenario == "child-completes-after-join":
             for child in CHILD_IDS:
                 f.add_work(child, generation=1)
+        if scenario == "source-advances-view-answers-anyway":
+            # An exact lookup for a named record is a read-your-writes
+            # query, so the view's declared contract for it is zero lag.
+            f.add_view(VIEW_ID, max_lag=0)
         f.start_worker("worker-1")
         f.log("seeded", scenario=scenario, mode=mode)
         self.factory = f
