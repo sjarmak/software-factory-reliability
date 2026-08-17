@@ -38,6 +38,32 @@ fired and been handled; the outcome was still wrong, because nothing
 level-triggered asked whether the work had actually landed.
 (gascity2026:docs/gc-4zf-track-a-reliability-surface-map-2026-07-16.md)
 
+That reaper is disabled in the system this page draws on, and the way it was
+disabled is the failure. On 2026-08-07 a capacity decision reduced the fleet to
+three standing seats and disarmed 42 scheduled orders in a single commit,
+described as work patrols. Two of the 42 were not work patrols. One is the
+level-triggered landing scan cited above. The other closes workflow roots left
+in progress after their work item has already closed. Neither dispatches
+anything: both are read-only by default, their mutating mode only closes records
+in the system's own store, one mails a report under an opt-in flag, and both are
+reversible. The reason for disarming a patrol under reduced capacity is that it
+hands work to seats that are not there. That reason does not apply to a scan
+that only repairs the record, and no one separated the two classes before
+disabling them as a group.
+
+Ten days later the disarmed cleanup scan, run by hand in its default read-only
+mode, reported 11 stranded workflow roots and 58 stranded finalize steps, with
+one correctly skipped as still live. Thirty-six finalize markers stood open, the
+oldest from 2026-07-22, every one with an update timestamp equal to its creation
+timestamp. Six of the stranded roots wrapped a work item that had already
+closed: the work was finished and the record still said in progress, which is
+the exact condition that scan exists to repair. Nothing had failed. The scan had
+been switched off as a side effect of a decision about something else, and no
+signal marked its absence, because a scan that does not run emits nothing to
+notice.
+(gascity2026:bin/orphaned-molecule-reaper,
+orders/orphaned-molecule-reaper.toml.disabled)
+
 Lookup failure treated as absence: gc-28jm's duplicate workflow roots were
 minted after a dedup query returned empty because it ran against a different
 store from the one holding the earlier root.
@@ -122,7 +148,12 @@ cycle and a bash poller) both exhibited on 2026-07-16.
   destination, an at-least-once repair lane amplifies duplicates.
 - That the scan itself runs. The single fleet-wide order-firing check was
   weekly, undocumented, skipped itself, and skipped every event-triggered
-  order; a check nobody runs is not a check.
+  order; a check nobody runs is not a check. A scan is also switched off
+  deliberately, by a decision aimed at a different class of job that swept it
+  up by schedule or by name. Classify scheduled jobs by whether they create
+  work or only repair records, and disable the two classes separately; a
+  capacity posture is a reason to stop handing out work, not a reason to stop
+  reconciling the record.
 - Outcome truth beyond the queried predicates. A scan over status fields
   inherits their lies; outcome predicates need independent evidence
   ([verify-before-publish](verify-before-publish.md)).
@@ -162,6 +193,16 @@ of deriving an absence repair.
 - Roughly 12 branches per day stranded closed-but-never-merged before a
   level-triggered reaper existed. Local observation
   (gascity2026:docs/gc-4zf-track-a-reliability-surface-map-2026-07-16.md).
+- A capacity decision disarmed 42 scheduled orders as work patrols, two of
+  which only repaired records and dispatched nothing; ten days on, the
+  disarmed cleanup scan reported 11 stranded workflow roots and 58 stranded
+  finalize steps, 36 finalize markers open with the oldest dated 2026-07-22,
+  and 6 roots whose work item had already closed. Local observation
+  (gascity2026:bin/orphaned-molecule-reaper,
+  orders/orphaned-molecule-reaper.toml.disabled). This page cites the landing
+  reaper's benefit while that reaper is disarmed in the authoring
+  installation; the claim about its value stands on the pre-disarm
+  measurement, not on current practice.
 - Memory-holding watcher pathology in one component: 60m22s
   review-to-dispatch latency on a 15-minute poll, roughly 72 API calls per
   hour at steady state to learn nothing, 174 cache files for 8 open PRs with
@@ -218,6 +259,8 @@ of deriving an absence repair.
 - gascity2026:docs/gc-4zf-track-a-reliability-surface-map-2026-07-16.md
 - gascity2026:docs/recovery/scheduler-capacity-review-9ad10d428.md
 - gascity2026:docs/incidents/2026-08-01-status-path-latency-recurrence.md
+- gascity2026:bin/orphaned-molecule-reaper,
+  gascity2026:orders/orphaned-molecule-reaper.toml.disabled
 - Related patterns: [effect-identity](effect-identity.md),
   [explicit-unknown-state](explicit-unknown-state.md),
   [verify-before-publish](verify-before-publish.md)
