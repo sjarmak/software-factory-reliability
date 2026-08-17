@@ -103,8 +103,8 @@ flowchart LR
 Everything inside the boundary evaluates the generation atomically with the
 write. A worker that lost its claim still holds credentials and still believes
 it is current, so the thing that reliably stops it is a destination that
-refuses. The full authority-plane, identity, and campaign diagrams are in
-[`docs/diagrams/`](docs/diagrams/).
+refuses. The full authority-plane, identity, and campaign diagrams render in
+[`docs/diagrams/`](docs/diagrams/README.md).
 
 ## Three ways to use this
 
