@@ -95,6 +95,26 @@ gascity2026:.gc-reports/factory-contract-audit-2026-08-16/factory.yaml). And
 the detection count was legible for 11 days as evidence of a large problem,
 which is precisely the reading a never-green check invites.
 
+The reading side of the same invariant failed twice in one night in that
+installation, and the second failure was inside the tool written to fix the
+first. Counting how often a launch hook fired was done by grepping an agent's
+session transcript for the hook's name, which also matches the agent's own prose
+about hooks in tool results and file edits, so the count was assembled partly
+out of the writing that described it and yielded a per-turn distribution that
+did not exist. The replacement keys on the record type instead of the string
+(local observation, gascity2026:bin/hook-duplication-check). Hours after it
+shipped, a second operator read a duplicate count off that tool with `grep -c
+submit` and got 19 where the answer was 17. The per-offender line read
+`<timestamp>  submit <key>`, so the grep returned 17 offender rows plus the
+tool's own header, `75 submit(s), 160 hook record(s)`, plus its own verdict
+line, `DUPLICATED: 17 of 75 submit(s)`. The verbose per-submit rows carried no
+`submit` token at all, so that grep was never counting submits; it counted
+duplicate rows and two of the instrument's summary lines, and landed close
+enough to pass for data. The gap of two was explained away as a population
+difference between operators before either of them checked the arithmetic. An
+instrument that is wrong by two survives scrutiny in a way that one wrong by
+fifty does not.
+
 Ten instruments in that installation have a single outcome word in their entire
 recorded vocabulary. One reaper has written exactly one line in its lifetime,
 and that line reports a detection, so nobody knows what it does when there is
@@ -111,6 +131,13 @@ component under check produced, so the branch reporting the other verdict is
 reachable in the running system. A check whose verdict is constant across a
 transition that crosses its own claim is not evidence about the system and is
 removed or repaired, in either direction of constancy.
+
+The same separation binds the check's output. A correct verdict is still
+unusable when the only way to extract it also matches the check's own
+commentary, because then the consumer's number is computed from what the check
+said about itself. Data rows carry a token that no summary, advice, or heading
+line contains, and the suite asserts that extracting by that token returns the
+same count the check reports in prose.
 
 ## Mechanism
 
