@@ -110,7 +110,7 @@ as a message string, and its order configuration carries no field for an
 expected or actionable exit code. The richer vocabulary therefore reached
 exactly one surface, an event log nobody reads, and everywhere else "I checked
 and found work" renders identically to "I crashed"
-(gascity2026:internal/orders/order_dispatch.go, gascity2026:internal/orders/order.go).
+(gascity2026:cmd/gc/order_dispatch.go, gascity2026:internal/orders/order.go).
 
 The cost is a board that cannot be read. Across those eleven checks, 1,313 runs
 were recorded as failures in the three days after the campaign landed. Seven
@@ -126,6 +126,25 @@ and persisted its dedupe state, then returned two because two of the five
 accounts it is required to observe can never be observed, one of them retired
 by decision a month earlier. The seventh was genuinely broken, and it had been
 sitting in the same colour as the other six for four days.
+
+What that concealment cost is better stated in outcomes than in board colours,
+because the case for repairing a display problem is otherwise easy to defer. The
+genuinely broken instrument was an approval gate. A hosted CI provider withholds
+workflow runs submitted from forks until a maintainer approves them, and the
+gate exists to find those runs and say so. A strictness change four days earlier
+made it require that every run it examined carry exactly one attached pull
+request. Runs submitted from forks carry zero attachments, every time, in 100 of
+100 measured. Because the census reads runs in arrival order, a single fork run
+at the first row of the first page raised before anything was examined, so the
+gate did not degrade to missing fork runs; it returned an incomplete reading on
+every fire and examined nothing at all. It said so honestly, thirteen times in
+the day it was finally read, using the tri-state contract the campaign had given
+it. Eleven pull requests from people outside the team had their tests blocked
+for four days, and nine of the eleven arrived after the gate went dark, so
+nobody had ever seen them. Two properties had to hold at once for that to last
+four days: the check refused to read precisely the population it existed to
+find, and the layer above it could not tell that refusal apart from the
+eighty-nine healthy runs recorded as failures on the same board on the same day.
 
 Where the fix has to go is what separates this from the boundary-side failure.
 Eleven scripts could each be edited to surrender their vocabulary and return
@@ -405,7 +424,7 @@ recorded. Evidence for both arms lands in `out/evidence/`.
   scheduler that maps every non-zero status to one execution-failed outcome and
   offers no per-order allowlist, so 1,313 runs across three days were recorded
   as failures with no way to separate a finding from a crash: local observation
-  (gascity2026:internal/orders/order_dispatch.go,
+  (gascity2026:cmd/gc/order_dispatch.go,
   gascity2026:internal/orders/order.go).
 - Of seven of those checks examined in detail, six were reporting correctly and
   one was genuinely broken: a report that exits non-zero because its finding is
@@ -416,6 +435,18 @@ recorded. Evidence for both arms lands in `out/evidence/`.
   failing run, then returned two because two of five required accounts are
   permanently unobservable, one retired by decision a month earlier: local
   observation (same sources).
+- The one genuinely broken check was an approval gate for externally submitted
+  CI runs, and it was concealed for four days by the eighty-nine healthy runs
+  recorded as failures beside it: a strictness change required exactly one
+  attached pull request per run, fork-submitted runs carry zero in 100 of 100
+  measured, and a fork run at the first row of the first page aborted the whole
+  census, so the gate returned an incomplete reading on every fire and examined
+  nothing. Thirteen of thirteen runs in the day it was finally read reported
+  that incompleteness correctly. Eleven outside-contributor pull requests had
+  their tests blocked, nine of them arriving after the gate went dark: local
+  observation, measured 2026-08-17 by invoking the gate read-only and by
+  re-querying the CI provider rather than trusting the tool's own exit line
+  (gascity2026:bin/fork-pr-approval-gate).
 - Idempotent receivers and request identifiers as the precondition for a safe
   retry: foundational (Joshi 2023, Patterns of Distributed Systems).
 - Fault classification into rejected-before-mutation, failed-after-mutation, and
@@ -476,7 +507,8 @@ obligation rather than removing it.
 - gascity2026:CLAUDE.md
 - gascity2026:docs/conventions/bead-dispatch.md
 - gascity2026:docs/adr/0021-idempotent-convergence-and-fenced-publication.md
-- gascity2026:internal/orders/order_dispatch.go
+- gascity2026:cmd/gc/order_dispatch.go
+- gascity2026:bin/fork-pr-approval-gate
 - gascity2026:internal/orders/order.go
 - Joshi 2023, Patterns of Distributed Systems (idempotent receiver, request identifiers)
 - Waldo, Wyant, Wollrath, Kendall 1994, A Note on Distributed Computing
