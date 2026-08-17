@@ -1,8 +1,8 @@
-"""Pytest coverage for the eight in-memory drills in both modes.
+"""Pytest coverage for the nine in-memory drills in both modes.
 
 Each drill-mode pair is run through the callable API (run_drill) for
 speed; exit codes and evidence-file invariants are asserted for all
-sixteen combinations, plus determinism and protocol-validation checks.
+eighteen combinations, plus determinism and protocol-validation checks.
 """
 
 from __future__ import annotations
@@ -34,6 +34,7 @@ EXPECTED_BARRIER = {
     "request-accepted-effect-never-applied": "request-accepted",
     "source-advances-view-answers-anyway": "view-current",
     "state-changes-check-does-not": "check-registered",
+    "guard-refuses-repair-never-runs": "resource-conforming",
 }
 # Full fault records: a targeted fault carries the target it was aimed at, so
 # the evidence names which lease expired rather than leaving it to the log.
@@ -46,6 +47,8 @@ EXPECTED_FAULT = {
     "request-accepted-effect-never-applied": {"kind": "drop_event"},
     "source-advances-view-answers-anyway": {"kind": "drop_event"},
     "state-changes-check-does-not": {"kind": "drop_event"},
+    "guard-refuses-repair-never-runs": {"kind": "drift_resource",
+                                        "target": "res-1"},
 }
 # Work items each scenario seeds, in identity_snapshot order (sorted).
 EXPECTED_WORK_IDS = {
@@ -57,6 +60,7 @@ EXPECTED_WORK_IDS = {
     "request-accepted-effect-never-applied": ["w-1"],
     "source-advances-view-answers-anyway": ["w-1"],
     "state-changes-check-does-not": ["w-1"],
+    "guard-refuses-repair-never-runs": ["w-1"],
 }
 COMBOS = [(drill, mode) for drill in sorted(DRILLS) for mode in MODES]
 
@@ -551,7 +555,7 @@ def test_oracles_error_on_vacuous_evidence():
         _oracle_worker_dies, _oracle_stale_writer, _oracle_effect_ack,
         _oracle_event_lost, _oracle_child_after_join,
         _oracle_request_never_applied, _oracle_stale_view,
-        _oracle_check_falsifiability)
+        _oracle_check_falsifiability, _oracle_guard_before_repair)
     vacuous = {
         "events": [],
         "authoritative_state": {
@@ -565,7 +569,8 @@ def test_oracles_error_on_vacuous_evidence():
     for oracle in (_oracle_worker_dies, _oracle_stale_writer,
                    _oracle_effect_ack, _oracle_event_lost,
                    _oracle_child_after_join, _oracle_request_never_applied,
-                   _oracle_stale_view, _oracle_check_falsifiability):
+                   _oracle_stale_view, _oracle_check_falsifiability,
+                   _oracle_guard_before_repair):
         verdict = oracle(vacuous)["verdict"]
         assert verdict == "error", f"{oracle.__name__} returned {verdict}"
 
@@ -628,3 +633,141 @@ def test_check_drill_unsafe_check_never_goes_red(tmp_path):
     assert observed["verdict_after_repair"] == "pass"
     assert observed["record_at_source"] is True
     assert observed["self_supplied_inputs"] == ["chk-1/verdict"]
+
+
+def _guard_drill_evidence(tmp_path: Path, mode: str) -> dict:
+    run_drill("guard-refuses-repair-never-runs", mode, tmp_path)
+    return json.loads(
+        (tmp_path / f"guard-refuses-repair-never-runs-{mode}.json").read_text())
+
+
+def test_guard_drill_arms_are_identical_until_the_drift(tmp_path):
+    """Both arms hold the same guard and the same repair, and the resource
+    conforms at the barrier, so the pre-drift half of the run must be the
+    same events in the same order. Nothing but the drift and the ordering
+    can account for what happens after."""
+    protected = _guard_drill_evidence(tmp_path / "p", "protected")
+    unsafe = _guard_drill_evidence(tmp_path / "u", "unsafe")
+
+    def prefix(evidence):
+        kinds = [e["kind"] for e in evidence["events"]]
+        return kinds[:kinds.index("fault-injected")]
+
+    assert prefix(protected) == prefix(unsafe)
+    assert "guarded-write-applied" in prefix(protected)
+    for evidence in (protected, unsafe):
+        assert "eff-0" in {m["effect_id"]
+                           for m in evidence["external_effects"]["mutations"]}
+
+
+def test_guard_drill_protected_write_lands_after_the_drift(tmp_path):
+    """The progress rail. The resource drifted and the operation still
+    reached the destination, because the repair ran ahead of the check
+    rather than behind it."""
+    ev = _guard_drill_evidence(tmp_path, "protected")
+    observed = ev["oracle"]["observed"]
+    assert observed["attempt_outcomes"] == ["applied", "applied"]
+    assert observed["effect_at_destination"] is True
+    assert "eff-1" in {m["effect_id"]
+                       for m in ev["external_effects"]["mutations"]}
+    assert ev["oracle"]["detail"]["progress"] is True
+
+
+def test_guard_drill_protected_reports_the_anomaly_and_repairs_it(tmp_path):
+    """The repair rail, asserted apart from the progress rail so neither can
+    carry the other. Deleting the refusal is not the same as deleting the
+    alarm: the anomaly is still reported, and the resource conforms at end
+    of run because the repair actually ran."""
+    ev = _guard_drill_evidence(tmp_path, "protected")
+    observed = ev["oracle"]["observed"]
+    assert observed["anomaly_reported"] is True
+    assert observed["repair_ran_after_the_drift"] is True
+    assert observed["resource_state"] == "owned-and-private"
+    assert observed["resource_conforms_at_end_of_run"] is True
+    assert ev["oracle"]["detail"]["repair_reachable"] is True
+    resource = ev["authoritative_state"]["resources"]["res-1"]
+    assert resource["conforms"] is True
+
+
+def test_guard_drill_unsafe_second_attempt_matches_the_first(tmp_path):
+    """The failure this drill exists for, and the half that makes it
+    expensive. Attempt 2 is refused exactly as attempt 1 was, the repair is
+    never reached in either, and the resource is still drifted at end of
+    run, so every later run fails the same way."""
+    ev = _guard_drill_evidence(tmp_path, "unsafe")
+    observed = ev["oracle"]["observed"]
+    assert observed["attempt_outcomes"] == ["refused-before-repair",
+                                            "refused-before-repair"]
+    assert observed["repair_reached_per_attempt"] == [False, False]
+    assert observed["anomaly_reported"] is False
+    assert observed["resource_state"] == "shared-writable"
+    assert observed["effect_at_destination"] is False
+    drift_tick = ev["oracle"]["detail"]["drift_tick"]
+    assert not [e for e in ev["events"]
+                if e["kind"] == "resource-repaired" and e["tick"] > drift_tick]
+
+
+def test_guard_oracle_does_not_fire_on_another_drill(tmp_path):
+    """A drill that goes red on everything proves nothing. Each oracle is
+    fed the other drill's unsafe evidence, where a real violation exists and
+    it is not the one being asked about: both must report error rather than
+    borrow the other's failure."""
+    from adapters.in_memory.run_drill import (_oracle_check_falsifiability,
+                                              _oracle_guard_before_repair)
+    guard = _guard_drill_evidence(tmp_path / "g", "unsafe")
+    check = _check_drill_evidence(tmp_path / "c", "unsafe")
+    assert guard["oracle"]["verdict"] == "violation"
+    assert check["oracle"]["verdict"] == "violation"
+    assert _oracle_guard_before_repair(check)["verdict"] == "error"
+    assert _oracle_check_falsifiability(guard)["verdict"] == "error"
+
+
+def test_repair_first_still_refuses_what_it_cannot_repair():
+    """The protected path is not a rubber stamp. A resource the operation
+    cannot move is refused after the repair attempt, nothing reaches the
+    destination, and the refusal is recorded as the kind a later run cannot
+    clear by itself."""
+    from adapters.in_memory.model import Factory
+    f = Factory("dedup", "fenced", True)
+    f.add_work("w-1", generation=1)
+    f.start_worker("worker-1")
+    f.claim_work("w-1", attempt=1)
+    f.launch_session("w-1", "worker-1", attempt=1)
+    f.add_resource("res-1", "owned-and-private", state="owned-by-someone-else",
+                   repairable=False)
+    result = f.guarded_write_repair_first("res-1", "w-1", "sess-1", "eff-1",
+                                          "payload-1", 1)
+    assert result == {"outcome": "refused-after-repair", "repair_reached": True}
+    assert f.destination.mutations == []
+    kinds = [e["kind"] for e in f.events]
+    assert "resource-repair-failed" in kinds
+    assert "precondition-anomaly-reported" in kinds
+    # The same write on a repairable resource in the same drifted state does
+    # land, so the refusal above is about the resource and not about the path.
+    f.add_resource("res-2", "owned-and-private", state="shared-writable")
+    assert f.guarded_write_repair_first("res-2", "w-1", "sess-1", "eff-2",
+                                        "payload-2", 1)["outcome"] == "applied"
+    assert [m.effect_id for m in f.destination.mutations] == ["eff-2"]
+
+
+def test_check_first_refuses_a_resource_its_own_repair_would_fix():
+    """The defect in isolation, with no drill around it. The unsafe path's
+    repair is the same call the protected path makes and would restore the
+    resource; it never runs, because the refusal returns first."""
+    from adapters.in_memory.model import Factory
+    f = Factory("dedup", "fenced", True)
+    f.add_work("w-1", generation=1)
+    f.start_worker("worker-1")
+    f.claim_work("w-1", attempt=1)
+    f.launch_session("w-1", "worker-1", attempt=1)
+    f.add_resource("res-1", "owned-and-private", state="shared-writable")
+    refused = f.guarded_write_check_first("res-1", "w-1", "sess-1", "eff-1",
+                                          "payload-1", 1)
+    assert refused["outcome"] == "refused-before-repair"
+    assert refused["repair_reached"] is False
+    assert f.destination.mutations == []
+    assert f.resource_conforms("res-1") is False
+    # Nothing about the resource made it unfixable: the repair the refused
+    # path skipped puts it right on its own.
+    assert f.repair_resource("res-1") is True
+    assert f.resource_conforms("res-1") is True

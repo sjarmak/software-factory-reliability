@@ -27,6 +27,12 @@ verdict, and the two evaluation paths (check_by_destination_readback and
 check_by_self_written_verdict) are the difference between an input the
 check cannot influence and an input the check produced a moment earlier.
 
+A seventh is the order of a guard and the repair that satisfies it. A
+guarded write enforces a precondition on a resource it also knows how to
+put right, and the two write paths (guarded_write_repair_first and
+guarded_write_check_first) are the difference between a refusal the
+operation can recover from and a refusal that outlives every later run.
+
 Basis note: the layer split mirrors the guarantee split observed in the
 Temporal experiment series (local observation,
 temporallab2026:docs/guarantees.md): completion cardinality at the
@@ -152,6 +158,38 @@ class Check:
     verdicts: list[str] = field(default_factory=list)
 
 
+@dataclass
+class Resource:
+    """Something a guarded write depends on, and the state that write needs.
+
+    required_state is the precondition the guard enforces; state is what the
+    resource is in now. repairable records whether the operation's own repair
+    step can move it, which is the distinction between a precondition the
+    operation owns and one only an operator can satisfy. A guard is entitled
+    to refuse on the second; refusing on the first without running the repair
+    is the failure this resource exists to model.
+    """
+
+    resource_id: str
+    required_state: str
+    state: str
+    repairable: bool = True
+
+
+# The state a drifted resource lands in: still owned by the factory, no
+# longer in the state the guarded write requires.
+DRIFTED_STATE = "shared-writable"
+
+# Outcomes a guarded write can return. refused-before-repair is the one the
+# operation cannot recover from, because the step that would have fixed the
+# resource sits downstream of the refusal.
+GUARDED_WRITE_OUTCOMES = (
+    "applied",
+    "refused-before-repair",
+    "refused-after-repair",
+)
+
+
 # Outcomes that describe a settled request. The other three
 # (requested-and-queued, partially-applied,
 # unknown-because-observation-failed) leave work owed to the caller.
@@ -249,6 +287,7 @@ class Factory:
         self.requests: dict[str, Request] = {}
         self.views: dict[str, DerivedView] = {}
         self.checks: dict[str, Check] = {}
+        self.resources: dict[str, Resource] = {}
         # Metadata the checks themselves write. Kept apart from the ledger
         # and the destination because its provenance is what the drill is
         # about: a value in here was produced by the thing being checked.
@@ -265,6 +304,7 @@ class Factory:
         self.request_ids: list[str] = []
         self.view_ids: list[str] = []
         self.check_ids: list[str] = []
+        self.resource_ids: list[str] = []
         self.generations_seen: list[int] = []
 
     def log(self, event_kind: str, /, **detail) -> None:
@@ -654,6 +694,132 @@ class Factory:
             check, "pass" if observed == "pass" else "fail",
             "self-written-metadata-key", key, observed)
 
+    # guarded writes
+
+    def add_resource(self, resource_id: str, required_state: str,
+                     state: str | None = None,
+                     repairable: bool = True) -> Resource:
+        resource = Resource(
+            resource_id=resource_id, required_state=required_state,
+            state=required_state if state is None else state,
+            repairable=repairable)
+        self.resources[resource_id] = resource
+        self._note(self.resource_ids, resource_id)
+        self.log("resource-added", resource_id=resource_id,
+                 required_state=required_state, state=resource.state,
+                 repairable=repairable)
+        return resource
+
+    def drift_resource(self, resource_id: str,
+                       state: str = DRIFTED_STATE) -> Resource:
+        """Move the resource out of the state a guarded write requires.
+
+        Nothing else changes: the resource still exists, is still owned by
+        the factory, and still holds its contents. Drift of this kind is the
+        ordinary case rather than an attack, which is why an operation that
+        can put it right is expected to.
+        """
+        resource = self.resources[resource_id]
+        previous = resource.state
+        resource.state = state
+        self.log("resource-drifted", resource_id=resource_id,
+                 from_state=previous, to_state=state,
+                 required_state=resource.required_state)
+        return resource
+
+    def resource_conforms(self, resource_id: str) -> bool:
+        resource = self.resources[resource_id]
+        return resource.state == resource.required_state
+
+    def repair_resource(self, resource_id: str) -> bool:
+        """Put the resource into the state the guarded write requires.
+
+        This is the step that must not sit downstream of the refusal. It is
+        unconditional by design: running it on a resource that already
+        conforms costs nothing, and making it conditional on an earlier
+        reading reintroduces the ordering the pattern is about.
+        """
+        resource = self.resources[resource_id]
+        previous = resource.state
+        if not resource.repairable:
+            self.log("resource-repair-failed", resource_id=resource_id,
+                     state=previous, required_state=resource.required_state,
+                     reason="the operation cannot move this resource")
+            return False
+        resource.state = resource.required_state
+        self.log("resource-repaired", resource_id=resource_id,
+                 from_state=previous, to_state=resource.state)
+        return True
+
+    def guarded_write_repair_first(self, resource_id: str, work_id: str,
+                                   session_id: str, effect_id: str,
+                                   payload: str, attempt: int) -> dict:
+        """Report the anomaly, repair the resource, verify, then write.
+
+        The refusal that remains is the one the operation cannot act on: the
+        repair ran and the resource still does not meet the precondition. A
+        write refused here is refused for a reason a later run cannot clear
+        by itself, which is the only refusal a guard is entitled to make.
+        """
+        resource = self.resources[resource_id]
+        if resource.state != resource.required_state:
+            # The alarm the deleted refusal used to raise. It is a report and
+            # not a decision, which is what lets the repair below still run.
+            self.log("precondition-anomaly-reported", resource_id=resource_id,
+                     observed_state=resource.state,
+                     required_state=resource.required_state,
+                     attempt=attempt)
+        self.repair_resource(resource_id)
+        if resource.state != resource.required_state:
+            return self._refuse_guarded_write(
+                resource, effect_id, attempt, "refused-after-repair",
+                "the repair ran and the resource still does not conform")
+        self.apply_effect(work_id, session_id, effect_id, payload, attempt)
+        self.log("guarded-write-applied", resource_id=resource_id,
+                 effect_id=effect_id, attempt=attempt,
+                 outcome="applied", repair_reached=True,
+                 resource_state=resource.state)
+        return {"outcome": "applied", "repair_reached": True}
+
+    def guarded_write_check_first(self, resource_id: str, work_id: str,
+                                  session_id: str, effect_id: str,
+                                  payload: str, attempt: int) -> dict:
+        """Enforce the precondition, then repair it (the unsafe path).
+
+        Both halves are here and both are individually reasonable. Their
+        order is the defect: the refusal returns before the repair, so the
+        repair only ever runs against a resource that already conformed, and
+        the first drift is permanent for every later run.
+        """
+        resource = self.resources[resource_id]
+        if resource.state != resource.required_state:
+            return self._refuse_guarded_write(
+                resource, effect_id, attempt, "refused-before-repair",
+                "the precondition check returned before the repair could run")
+        self.repair_resource(resource_id)
+        self.apply_effect(work_id, session_id, effect_id, payload, attempt)
+        self.log("guarded-write-applied", resource_id=resource_id,
+                 effect_id=effect_id, attempt=attempt,
+                 outcome="applied", repair_reached=True,
+                 resource_state=resource.state)
+        return {"outcome": "applied", "repair_reached": True}
+
+    def _refuse_guarded_write(self, resource: Resource, effect_id: str,
+                              attempt: int, outcome: str,
+                              reason: str) -> dict:
+        """Record a refused write and whether the repair ran before it.
+
+        repair_reached is the field that separates the two refusals. Without
+        it the log shows a guard doing its job in both arms.
+        """
+        repair_reached = outcome != "refused-before-repair"
+        self.log("guarded-write-refused", resource_id=resource.resource_id,
+                 effect_id=effect_id, attempt=attempt, outcome=outcome,
+                 reason=reason, repair_reached=repair_reached,
+                 observed_state=resource.state,
+                 required_state=resource.required_state)
+        return {"outcome": outcome, "repair_reached": repair_reached}
+
     # destination operations
 
     def apply_effect(self, work_id: str, session_id: str, effect_id: str,
@@ -822,6 +988,13 @@ class Factory:
                 for cid, c in self.checks.items()
             },
             "check_metadata": dict(self.check_metadata),
+            "resources": {
+                rid: {"resource_id": r.resource_id,
+                      "required_state": r.required_state,
+                      "state": r.state, "repairable": r.repairable,
+                      "conforms": r.state == r.required_state}
+                for rid, r in self.resources.items()
+            },
         }
 
     def effects_snapshot(self) -> dict:
@@ -862,6 +1035,7 @@ class Factory:
             "request_ids": list(self.request_ids),
             "view_ids": list(self.view_ids),
             "check_ids": list(self.check_ids),
+            "resource_ids": list(self.resource_ids),
             "mutation_ids": [m.mutation_id for m in self.destination.mutations],
             "receipt_ids": [m.receipt for m in self.destination.mutations],
             "attempt_to_session": {

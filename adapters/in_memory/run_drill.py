@@ -7,7 +7,8 @@ Usage:
 Drills: worker-dies-agent-survives, stale-writer-completes,
 effect-commits-ack-is-lost, event-is-lost, child-completes-after-join,
 request-accepted-effect-never-applied,
-source-advances-view-answers-anyway, state-changes-check-does-not.
+source-advances-view-answers-anyway, state-changes-check-does-not,
+guard-refuses-repair-never-runs.
 
 Exit codes:
     0  protected mode and the oracle passed
@@ -37,7 +38,8 @@ if __package__ in (None, ""):  # pragma: no cover - script-invocation path
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from adapters.in_memory.adapter import (CHECK_ID, CHILD_IDS, EFFECT_ID,
-                                        REQUEST_ID, STRAGGLER_ID, VIEW_ID,
+                                        PRIOR_EFFECT_ID, REQUEST_ID,
+                                        RESOURCE_ID, STRAGGLER_ID, VIEW_ID,
                                         WORK_ID, InMemoryAdapter)
 
 
@@ -625,6 +627,106 @@ def _oracle_check_falsifiability(evidence: dict) -> dict:
     }
 
 
+def _oracle_guard_before_repair(evidence: dict) -> dict:
+    """Two checks over one guard and the repair that satisfies it.
+
+    Progress: an operation whose precondition the factory itself can restore
+    must still reach the destination after the resource drifts. Repair
+    reachability: the step that restores the precondition must actually run
+    after the drift, and the resource must conform at end of run.
+
+    Both are recomputed here from ground truth and share no input. The
+    progress rail reads the destination's mutation list and never the
+    resource or a refusal; the repair rail reads the resource's final state
+    and the repair events and never the destination. Neither can carry the
+    other, and the second exists because passing the first is not
+    sufficient: a write that lands while the resource stays drifted has
+    deleted the guard rather than ordered it, and loses the anomaly report
+    with it.
+
+    The verdict only counts if the log shows a write landing while the
+    resource conformed, the drift after that, and two further attempts at
+    the same write. The second attempt is what makes permanence visible: a
+    failure that repeats identically is a different finding from a failure
+    that happened once.
+    """
+    events = evidence["events"]
+    state = evidence["authoritative_state"]
+    effects = evidence["external_effects"]
+    description = ("A guarded write landed while the resource conformed, the "
+                   "resource then drifted out of the state that write "
+                   "requires, and two further attempts ran: the write reached "
+                   "the destination and the repair that restores the "
+                   "precondition ran after the drift.")
+    missing = []
+    prior_tick = _first_tick(events, "guarded-write-applied",
+                             effect_id=PRIOR_EFFECT_ID)
+    if prior_tick is None:
+        missing.append("a guarded write landing while the resource conformed")
+    fault_tick = _first_tick(events, "fault-injected")
+    drift_tick = _first_tick(events, "resource-drifted",
+                             resource_id=RESOURCE_ID)
+    if drift_tick is None or (fault_tick is not None
+                              and drift_tick <= fault_tick):
+        missing.append("the injected drift of the resource")
+    if (drift_tick is not None and prior_tick is not None
+            and drift_tick <= prior_tick):
+        missing.append("the drift landing after the conforming write")
+    attempts = [e for e in events
+                if e.get("kind") in ("guarded-write-applied",
+                                     "guarded-write-refused")
+                and e.get("effect_id") == EFFECT_ID
+                and drift_tick is not None and e["tick"] > drift_tick]
+    if len(attempts) < 2:
+        missing.append("two attempts at the guarded write after the drift")
+    resource = state.get("resources", {}).get(RESOURCE_ID)
+    if resource is None:
+        missing.append("the resource in the final state snapshot")
+    if missing:
+        return _preconditions_failed(missing, "precondition-is-repairable",
+                                     description)
+
+    # Progress rail: recounted from the destination alone.
+    at_destination = EFFECT_ID in {m["effect_id"] for m in effects["mutations"]}
+
+    # Repair rail: the resource's own final state plus the repair events,
+    # reading nothing about what did or did not reach the destination.
+    repaired_after_drift = any(
+        e.get("kind") == "resource-repaired"
+        and e.get("resource_id") == RESOURCE_ID
+        and e["tick"] > drift_tick
+        for e in events)
+    conforms = resource["state"] == resource["required_state"]
+    repair_reachable = repaired_after_drift and conforms
+
+    outcomes = [e.get("outcome") for e in attempts]
+    repair_reached = [e.get("repair_reached") for e in attempts]
+    anomaly_reported = any(e.get("kind") == "precondition-anomaly-reported"
+                           and e.get("resource_id") == RESOURCE_ID
+                           for e in events)
+    verdict = "pass" if (at_destination and repair_reachable) else "violation"
+    return {
+        "name": "precondition-is-repairable",
+        "description": description,
+        "expected": {"effect_at_destination": True,
+                     "repair_ran_after_the_drift": True,
+                     "resource_conforms_at_end_of_run": True},
+        "observed": {"effect_at_destination": at_destination,
+                     "repair_ran_after_the_drift": repaired_after_drift,
+                     "resource_state": resource["state"],
+                     "required_state": resource["required_state"],
+                     "resource_conforms_at_end_of_run": conforms,
+                     "attempt_outcomes": outcomes,
+                     "repair_reached_per_attempt": repair_reached,
+                     "anomaly_reported": anomaly_reported},
+        "detail": {"prior_write_tick": prior_tick, "drift_tick": drift_tick,
+                   "attempt_ticks": [e["tick"] for e in attempts],
+                   "progress": at_destination,
+                   "repair_reachable": repair_reachable},
+        "verdict": verdict,
+    }
+
+
 @dataclass(frozen=True)
 class DrillSpec:
     barrier: str
@@ -677,6 +779,12 @@ DRILLS: dict[str, DrillSpec] = {
         barrier="check-registered",
         fault_kind="drop_event",
         oracle=_oracle_check_falsifiability,
+    ),
+    "guard-refuses-repair-never-runs": DrillSpec(
+        barrier="resource-conforming",
+        fault_kind="drift_resource",
+        oracle=_oracle_guard_before_repair,
+        fault_target=RESOURCE_ID,
     ),
 }
 

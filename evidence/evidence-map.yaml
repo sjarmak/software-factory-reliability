@@ -600,3 +600,73 @@ patterns:
         executes only against the in-memory simulator.
       basis: inference
       source: "this kit's falsifiable-checks pattern and the state-changes-check-does-not drill"
+
+  repairable-preconditions:
+    - claim: >-
+        A precondition check placed ahead of the enforcement that
+        establishes the precondition is a one-way door. An instrument's
+        write path refused any audit log that was group or world writable,
+        and the call forcing the mode back to owner-only ran after that
+        refusal on a descriptor it had prevented from opening. The log
+        drifted on the last run that succeeded, 2026-08-13T00:25 local, and
+        the next 94 scheduled runs exited non-zero without examining a
+        single subject, through 2026-08-17T04:01, with no successful run
+        among them.
+      basis: local-observation
+      source: "gascity2026:bin/pool-worktree-provision-check; gascity2026:.gc/events.jsonl"
+    - claim: >-
+        The same instrument carried the defect twice. Its read path refused
+        a group-writable state file, and the step that rewrites that file
+        runs after the read at the single call site, so the state file could
+        never be read and never be repaired. It is still group writable for
+        that reason.
+      basis: local-observation
+      source: gascity2026:bin/pool-worktree-provision-check
+    - claim: >-
+        Deletion rather than reordering was the correct repair there,
+        because the write path already forced the mode on the open
+        descriptor: the refusal duplicated an enforcement downstream of
+        itself and could not add safety to it. The fix was net negative and
+        kept the refusals the operation cannot satisfy for itself, namely
+        symlink refusal, an ownership test, a regular-file test, and a read
+        size bound.
+      basis: local-observation
+      source: gascity2026:bin/pool-worktree-provision-check
+    - claim: >-
+        Removal is a legitimate outcome of examining a guard, and the
+        complementary case is a guard whose removal is felt at once. A
+        destination hash re-read standing behind three earlier guards was
+        deleted after a constant-false condition left the full suite green,
+        while the same treatment of a refusal to write to a destination path
+        that exists and is not a regular file took its suite from 16 passed
+        and 0 failed to 14 passed and 2 failed.
+      basis: local-observation
+      source: "gascity2026:bin/asks-vault-mirror; gascity2026:bin/asks-vault-mirror.test"
+    - claim: >-
+        A check whose repair leg cannot run accumulates detections that read
+        as severity: 32,618 detections against zero repairs over 11 days,
+        from a timeout killing every repair run, on a check whose lifetime
+        counters show it converging before that.
+      basis: local-observation
+      source: "gascity2026:docs/asks-and-outcomes.md; gascity2026:.gc-reports/factory-contract-audit-2026-08-16/factory.yaml"
+    - claim: >-
+        Converging toward a desired state by repeated observation and
+        correction, rather than refusing to act on states that differ from
+        the expected one, is the established form of the general argument.
+      basis: foundational
+      source: "Burgess 2003, On the theory of system administration"
+    - claim: >-
+        Fail-safe defaults and least common mechanism argue for the guards
+        that survive this treatment and not for the ones duplicating a
+        downstream enforcement: the refusals worth keeping are those an
+        operation cannot satisfy for itself.
+      basis: foundational
+      source: "Saltzer and Schroeder 1975, The Protection of Information in Computer Systems"
+    - claim: >-
+        A repair that runs only when an earlier reading says it is needed
+        reintroduces the same ordering hazard, because the reading can be
+        stale by the time the repair would act. This applies the
+        time-of-check to time-of-use argument to the repair path and is not
+        separately measured here.
+      basis: inference
+      source: "this kit's repairable-preconditions pattern and the guard-refuses-repair-never-runs drill"

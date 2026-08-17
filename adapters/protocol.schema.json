@@ -95,7 +95,7 @@
           "additionalProperties": false
         },
         {
-          "description": "inject_fault: apply a fault while the run is paused at at_barrier, which must equal the barrier the run is currently paused at. This ties the fault to a position in the causal order rather than to timing. kill_worker terminates the worker process abruptly; sessions it launched survive it. drop_event arms the event bus to drop the next emitted event. expire_lease invalidates the current lease on the work item.",
+          "description": "inject_fault: apply a fault while the run is paused at at_barrier, which must equal the barrier the run is currently paused at. This ties the fault to a position in the causal order rather than to timing. kill_worker terminates the worker process abruptly; sessions it launched survive it. drop_event arms the event bus to drop the next emitted event. expire_lease invalidates the current lease on the work item. drift_resource moves the named resource out of the state a later guarded write requires, leaving it otherwise intact.",
           "type": "object",
           "required": [
             "op",
@@ -116,7 +116,8 @@
                   "enum": [
                     "kill_worker",
                     "drop_event",
-                    "expire_lease"
+                    "expire_lease",
+                    "drift_resource"
                   ],
                   "description": "Fault kind to inject."
                 },
@@ -126,7 +127,7 @@
                 },
                 "target": {
                   "type": "string",
-                  "description": "Optional explicit target (worker id, work id); the adapter infers the scenario's default target when absent."
+                  "description": "Optional explicit target (worker id, work id, resource id); the adapter infers the scenario's default target when absent."
                 }
               },
               "additionalProperties": false

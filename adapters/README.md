@@ -33,7 +33,9 @@ for speed; the stdio loop is `python3 -m adapters.in_memory.adapter`.
   `at_barrier`; the adapter must reject the call if the run is paused
   anywhere else. Kinds: `kill_worker` (the worker process dies; sessions it
   launched survive), `drop_event` (the bus drops the next emitted event),
-  `expire_lease` (the work item's current lease is invalidated).
+  `expire_lease` (the work item's current lease is invalidated),
+  `drift_resource` (a resource a guarded write depends on moves out of the
+  state that write requires, and is otherwise untouched).
 - `advance_generation(work_id)`: allocates the next monotonic ownership
   generation with a fresh lease; the returned generation is strictly
   greater than every earlier one for that work item.

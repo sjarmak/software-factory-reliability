@@ -19,7 +19,7 @@ from pathlib import Path
 
 import jsonschema
 
-from adapters.in_memory.model import TERMINAL_OUTCOMES, Factory
+from adapters.in_memory.model import DRIFTED_STATE, TERMINAL_OUTCOMES, Factory
 
 _SCHEMA_PATH = Path(__file__).resolve().parents[1] / "protocol.schema.json"
 _SCHEMA = json.loads(_SCHEMA_PATH.read_text())
@@ -33,6 +33,8 @@ PRIOR_EFFECT_ID = "eff-0"
 REQUEST_ID = "req-1"
 VIEW_ID = "view-1"
 CHECK_ID = "chk-1"
+RESOURCE_ID = "res-1"
+REQUIRED_STATE = "owned-and-private"
 CHILD_IDS = ("c-1", "c-2", "c-3")
 STRAGGLER_ID = "c-3"
 MODES = ("protected", "unsafe")
@@ -45,6 +47,7 @@ SCENARIOS = (
     "request-accepted-effect-never-applied",
     "source-advances-view-answers-anyway",
     "state-changes-check-does-not",
+    "guard-refuses-repair-never-runs",
 )
 
 
@@ -454,6 +457,43 @@ def _script_check_falsifiability(f: Factory, mode: str) -> list:
     ]
 
 
+def _script_guard_before_repair(f: Factory, mode: str) -> list:
+    """One guarded write lands while the resource conforms, the resource is
+    then drifted out of the state that write requires, and the same write is
+    attempted twice more. Both arms hold the same guard and the same repair;
+    they differ only in which runs first. The protected arm reports the
+    anomaly, repairs the resource, verifies it, and writes. The unsafe arm
+    refuses on the precondition and returns, so its repair step is never
+    reached and the second attempt fails exactly as the first did."""
+
+    def seed_and_write():
+        f.claim_work(WORK_ID, attempt=1)
+        f.launch_session(WORK_ID, "worker-1", attempt=1)
+        _guarded_write(f, mode, PRIOR_EFFECT_ID, "payload-0", attempt=1)
+
+    def attempt_1():
+        _guarded_write(f, mode, EFFECT_ID, "payload-1", attempt=1)
+
+    def attempt_2():
+        _guarded_write(f, mode, EFFECT_ID, "payload-1", attempt=2)
+
+    return [
+        ("action", "seed-and-write", seed_and_write),
+        ("barrier", "resource-conforming", None),
+        ("action", "attempt-1", attempt_1),
+        ("action", "attempt-2", attempt_2),
+        ("barrier", "run-complete", None),
+    ]
+
+
+def _guarded_write(f: Factory, mode: str, effect_id: str, payload: str,
+                   attempt: int) -> dict:
+    write = (f.guarded_write_repair_first if mode == "protected"
+             else f.guarded_write_check_first)
+    return write(RESOURCE_ID, WORK_ID, f.attempt_sessions[1], effect_id,
+                 payload, attempt)
+
+
 _SCRIPT_BUILDERS = {
     "worker-dies-agent-survives": _script_worker_dies,
     "stale-writer-completes": _script_stale_writer,
@@ -463,6 +503,7 @@ _SCRIPT_BUILDERS = {
     "request-accepted-effect-never-applied": _script_request_never_applied,
     "source-advances-view-answers-anyway": _script_view_lag,
     "state-changes-check-does-not": _script_check_falsifiability,
+    "guard-refuses-repair-never-runs": _script_guard_before_repair,
 }
 
 
@@ -523,6 +564,11 @@ class InMemoryAdapter:
             # An exact lookup for a named record is a read-your-writes
             # query, so the view's declared contract for it is zero lag.
             f.add_view(VIEW_ID, max_lag=0)
+        if scenario == "guard-refuses-repair-never-runs":
+            # The resource starts in the state the guarded write requires, so
+            # the run has a conforming write on record before the drift and
+            # both arms are provably identical up to that point.
+            f.add_resource(RESOURCE_ID, REQUIRED_STATE)
         f.start_worker("worker-1")
         f.log("seeded", scenario=scenario, mode=mode)
         self.factory = f
@@ -588,6 +634,8 @@ class InMemoryAdapter:
             f.log("drop-armed", pending_drops=f.bus.drop_remaining)
         elif kind == "expire_lease":
             f.expire_lease(params.get("target", WORK_ID))
+        elif kind == "drift_resource":
+            f.drift_resource(params.get("target", RESOURCE_ID), DRIFTED_STATE)
         record = {"kind": kind, "at_barrier": at_barrier}
         if "target" in params:
             record["target"] = params["target"]
