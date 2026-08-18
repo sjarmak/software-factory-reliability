@@ -65,6 +65,9 @@ class CallSite:
     kind: str = "scripted"
     has_identity: bool = False
     identity_evidence: str = ""
+    # The match sat inside a quoted string. Not a verdict -- see
+    # EffectEvidence.quoted_unclassified for what is and is not concluded.
+    quoted: bool = False
 
 
 @dataclass
@@ -100,8 +103,41 @@ class EffectEvidence:
         return [s for s in self.sites if s.kind == "fenced"]
 
     @property
+    def quoted_unclassified(self):
+        """Matches inside a quoted string that carry no identity marker.
+
+        These are set aside from the fix list and from nothing else. The two
+        shapes are not distinguishable mechanically, and both are common:
+
+          PUSH_CMD="git push origin main"      a real command, built to run later
+          fail "nested git push commands ..."  prose that names the command
+
+        What separates them here is only that the second cannot be fixed --
+        there is no invocation to add a flag to. Reporting them alongside the
+        real unkeyed sites sent a reader to edit a sed replacement string; the
+        first version of this scanner reported six such matches on the city it
+        was written against, four of which were error text and glob patterns.
+
+        Setting them aside is therefore a reporting change and MUST NOT be a
+        scoring one. The identity stays undecided while any remain, and the way
+        to decide it is `not_regex` in the probe pack, which the reason names.
+        A rule that silently dropped these would be a guard that can only ever
+        improve a score: it would hide exactly the dangerous case, a deferred
+        command assembled with no identity marker at all.
+        """
+        return [
+            s
+            for s in self.scripted + self.fenced
+            if s.quoted and not s.has_identity
+        ]
+
+    @property
     def missing_identity(self):
-        return [s for s in self.scripted + self.fenced if not s.has_identity]
+        return [
+            s
+            for s in self.scripted + self.fenced
+            if not s.has_identity and not s.quoted
+        ]
 
     def derived_identity(self):
         """The identity name, only when every SCRIPTED site carries it and no
@@ -150,6 +186,7 @@ class EffectEvidence:
                 )
             else:
                 alongside = "%d scripted site(s) carry it" % len(bindable)
+            alongside += self._quoted_note()
             return (
                 "unknown",
                 "%d call site(s) are agent instructions, not code, so no static "
@@ -160,9 +197,15 @@ class EffectEvidence:
         if self.missing_identity:
             return (
                 "unknown",
-                "%d of %d scripted call sites carry no %s%s"
+                "%d of %d scripted call sites carry no %s%s%s"
                 % (len(self.missing_identity), len(bindable), self.identity_name,
-                   self._through_a_fence()),
+                   self._through_a_fence(), self._quoted_note()),
+            )
+        if self.quoted_unclassified:
+            return (
+                "unknown",
+                "every unquoted scripted call site carries it%s%s"
+                % (self._through_a_fence(), self._quoted_note()),
             )
         return (
             self.identity_name,
@@ -213,9 +256,16 @@ class EffectEvidence:
         if self.missing_identity:
             return (
                 "unknown",
-                "%d of %d code call site(s) carry no %s%s"
+                "%d of %d code call site(s) carry no %s%s%s"
                 % (len(self.missing_identity), len(bindable), self.identity_name,
-                   self._through_a_fence()),
+                   self._through_a_fence(), self._quoted_note()),
+                residual,
+            )
+        if self.quoted_unclassified:
+            return (
+                "unknown",
+                "every unquoted code call site carries it%s%s"
+                % (self._through_a_fence(), self._quoted_note()),
                 residual,
             )
         return (
@@ -223,6 +273,23 @@ class EffectEvidence:
             "all %d code call site(s) carry it%s"
             % (len(bindable), self._through_a_fence()),
             residual,
+        )
+
+    def _quoted_note(self):
+        """Name the set-aside matches, and how to settle them.
+
+        Without the second half this is a dead end: an effect whose only
+        unkeyed matches are quoted can never be decided, and the reader is not
+        told there is a lever. `not_regex` in the probe pack is the lever, and
+        using it moves the score -- which is the property that makes the fix
+        worth doing rather than invisible.
+        """
+        if not self.quoted_unclassified:
+            return ""
+        return (
+            "; %d quoted match(es) set aside for review -- exclude the ones "
+            "that are not invocations with not_regex in the probe pack"
+            % len(self.quoted_unclassified)
         )
 
     def _through_a_fence(self):
@@ -825,6 +892,45 @@ def _resolve_overlaps(sites):
     return [best[key] for key in sorted(best)]
 
 
+def match_is_quoted(segment, matchers, language):
+    """Whether the first matching pattern lands inside a quoted string.
+
+    Shell-style quoting only, and deliberately so: the languages in scope here
+    (shell, TOML formula bodies, prompt markdown holding shell) all quote the
+    same two ways, and Python's triple-quoted and f-string forms would need a
+    real parser to get right. An unsupported language returns False, which
+    leaves the site in the fix list -- the conservative direction, since a site
+    wrongly kept is reviewed and a site wrongly set aside is not.
+    """
+    if language not in ("shell", "unknown", "toml", "markdown"):
+        return False
+    pos = None
+    for matcher in matchers:
+        langs = matcher.get("languages")
+        if langs and language not in langs:
+            continue
+        found = re.search(matcher["regex"], segment)
+        if found:
+            pos = found.start()
+            break
+    if pos is None:
+        return False
+    quote, i = None, 0
+    while i < pos and i < len(segment):
+        char = segment[i]
+        if quote is None:
+            if char in "\'\"":
+                quote = char
+            elif char == "\\":
+                i += 1
+        elif char == quote:
+            quote = None
+        elif quote == '"' and char == "\\":
+            i += 1
+        i += 1
+    return quote is not None
+
+
 def _collect(evidence, files, kind, matchers, path_globs, markers):
     for rel, text, language in files:
         if path_globs and not _matches_any(rel, path_globs):
@@ -858,6 +964,7 @@ def _collect(evidence, files, kind, matchers, path_globs, markers):
                     kind=kind,
                     has_identity=bool(found),
                     identity_evidence=evidence_text,
+                    quoted=match_is_quoted(segment, matchers, language),
                 )
             )
 

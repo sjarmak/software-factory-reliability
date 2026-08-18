@@ -296,6 +296,12 @@ def cmd_infer(args):
               % (mark, item.name, len(item.sites), value, reason))
         for site in item.missing_identity:
             print("         no %s: %s:%d" % (item.identity_name, site.path, site.line))
+        # Printed under their own heading, with the matched text, because the
+        # reader's job on these is to decide whether each one is an invocation
+        # at all -- which the location alone cannot tell them.
+        for site in item.quoted_unclassified:
+            print("         quoted, review: %s:%d  %s"
+                  % (site.path, site.line, site.text[:80]))
 
     evidence_path = out_dir / "evidence.json"
     evidence_path.write_text(json.dumps(

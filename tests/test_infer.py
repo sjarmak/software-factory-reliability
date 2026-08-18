@@ -970,3 +970,91 @@ def test_an_unavailable_ignore_check_is_reported_not_swallowed(tmp_path):
     assert "bin/ship" in scanned
     assert notes and "could not be checked" in notes[0]
     assert "scanned as if it were source" in notes[0]
+
+
+def test_a_quoted_mention_is_set_aside_from_the_fix_list(tmp_path):
+    """Prose that names the command is not something anyone can add a flag to.
+
+    Measured on the gas-city installation before this existed: git_push
+    reported "6 of 16 scripted site(s) carry no expected_remote_ref", and three
+    of the six were a jq glob pattern, an error message, and a sed replacement
+    string. A reader sent to fix six things found three of them unfixable.
+    """
+    value, reason = _identity(tmp_path, {
+        "bin/real": BARE,
+        "bin/talks-about-it": (
+            "#!/usr/bin/env bash\n"
+            'echo "run gc slack publish-to-channel to post it"\n'
+        ),
+    })
+    assert value == "unknown"
+    root, probes = _install(tmp_path, {
+        "bin/real": BARE,
+        "bin/talks-about-it": (
+            "#!/usr/bin/env bash\n"
+            'echo "run gc slack publish-to-channel to post it"\n'
+        ),
+    })
+    _, evidence = infer.derive(root, infer.load_probes(probes))
+    item = evidence[0]
+    assert [s.path for s in item.missing_identity] == ["bin/real"]
+    assert [s.path for s in item.quoted_unclassified] == ["bin/talks-about-it"]
+    assert "1 quoted match(es) set aside" in reason
+
+
+def test_setting_a_quoted_match_aside_never_decides_the_identity(tmp_path):
+    """The dangerous case and the harmless one look identical, so neither is
+    allowed to make the score better.
+
+    A deferred command assembled with no marker -- PUSH_CMD="git push origin
+    main" -- is exactly the unfenced write this kit exists to find, and it is
+    quoted. Dropping quoted matches silently would be a guard that can only
+    ever raise a score, which is the shape of an instrument that inverts on the
+    case it was built for.
+    """
+    value, reason = _identity(tmp_path, {
+        "bin/keyed": KEYED,
+        "bin/deferred": (
+            "#!/usr/bin/env bash\n"
+            'CMD="gc slack publish-to-channel --session x --file /tmp/m"\n'
+            'eval "$CMD"\n'
+        ),
+    })
+    # Every unquoted site carries the marker, and the answer is still not yes.
+    assert value == "unknown"
+    assert "every unquoted scripted call site carries it" in reason
+    assert "not_regex" in reason
+
+
+def test_excluding_a_quoted_mention_by_not_regex_decides_it(tmp_path):
+    """The escape has to move the score, or the note above is a dead end.
+
+    An effect whose only unkeyed matches are quoted would otherwise be stuck at
+    unknown with nothing the reader could do about it -- and a fix that cannot
+    change the reading is a fix nobody will make.
+    """
+    root, probes = _install(tmp_path, {
+        "bin/keyed": KEYED,
+        "bin/talks-about-it": (
+            "#!/usr/bin/env bash\n"
+            'echo "run gc slack publish-to-channel to post it"\n'
+        ),
+    })
+    text = probes.read_text().replace(
+        "            not_regex: ['--help']",
+        "            not_regex: ['--help', 'echo \"run ']",
+    )
+    probes.write_text(text)
+    _, evidence = infer.derive(root, infer.load_probes(probes))
+    value, reason = evidence[0].derived_identity()
+    assert value == "idempotency_key"
+    assert "quoted" not in reason
+
+
+def test_an_unquoted_command_is_not_set_aside(tmp_path):
+    """The rail that keeps the quote test from swallowing real call sites."""
+    root, probes = _install(tmp_path, {"bin/real": BARE})
+    _, evidence = infer.derive(root, infer.load_probes(probes))
+    item = evidence[0]
+    assert [s.path for s in item.missing_identity] == ["bin/real"]
+    assert item.quoted_unclassified == []
