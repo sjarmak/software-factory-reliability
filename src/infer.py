@@ -86,8 +86,21 @@ class EffectEvidence:
         return [s for s in self.sites if s.kind == "harness"]
 
     @property
+    def fenced(self):
+        """Call sites that invoke a declared fenced command.
+
+        They are neither scripted nor instructed for the purposes of the
+        derivation: the identity is not on the call line and never will be,
+        because the whole point of a fence is that it lives one layer in. What
+        binds them is the fence's own implementation, which IS measured as an
+        ordinary scripted site -- so a wrapper that does not carry the marker
+        withdraws the identity from every site that calls it.
+        """
+        return [s for s in self.sites if s.kind == "fenced"]
+
+    @property
     def missing_identity(self):
-        return [s for s in self.scripted if not s.has_identity]
+        return [s for s in self.scripted + self.fenced if not s.has_identity]
 
     def derived_identity(self):
         """The identity name, only when every SCRIPTED site carries it and no
@@ -113,7 +126,7 @@ class EffectEvidence:
                 "there is nothing to look for at its %d call site(s)"
                 % len(self.sites),
             )
-        if not self.scripted and not self.instructed:
+        if not self.scripted and not self.instructed and not self.fenced:
             return (
                 "unknown",
                 "the only %d call site(s) are harness code; nothing in the "
@@ -125,32 +138,47 @@ class EffectEvidence:
             # patched away; how the scripted sites scored is the part someone
             # can fix this afternoon. Reporting only the first taught readers
             # there was nothing to do.
-            if not self.scripted:
+            bindable = self.scripted + self.fenced
+            if not bindable:
                 alongside = "no scripted site(s) alongside"
             elif self.missing_identity:
                 alongside = "%d of %d scripted site(s) carry no %s" % (
                     len(self.missing_identity),
-                    len(self.scripted),
+                    len(bindable),
                     self.identity_name,
                 )
             else:
-                alongside = "%d scripted site(s) carry it" % len(self.scripted)
+                alongside = "%d scripted site(s) carry it" % len(bindable)
             return (
                 "unknown",
                 "%d call site(s) are agent instructions, not code, so no static "
                 "marker can bind them; %s"
                 % (len(self.instructed), alongside),
             )
+        bindable = self.scripted + self.fenced
         if self.missing_identity:
             return (
                 "unknown",
-                "%d of %d scripted call sites carry no %s"
-                % (len(self.missing_identity), len(self.scripted), self.identity_name),
+                "%d of %d scripted call sites carry no %s%s"
+                % (len(self.missing_identity), len(bindable), self.identity_name,
+                   self._through_a_fence()),
             )
         return (
             self.identity_name,
-            "all %d scripted call sites carry it" % len(self.scripted),
+            "all %d scripted call sites carry it%s"
+            % (len(bindable), self._through_a_fence()),
         )
+
+    def _through_a_fence(self):
+        """Name the fenced share, so a reader can tell WHERE the identity is.
+
+        A count that folds fenced sites into the scripted total reads as though
+        every line carried the marker itself, and sends the next person looking
+        for a flag that is deliberately not there.
+        """
+        if not self.fenced:
+            return ""
+        return " (%d of them through a fenced command)" % len(self.fenced)
 
 
 def load_probes(path):
@@ -453,6 +481,53 @@ def python_command_assemblies(text):
     return {line: " ".join(parts) for line, parts in assemblies.items() if parts}
 
 
+_SHELL_VAR_REF = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?")
+_SHELL_ASSIGN = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
+
+
+def shell_variable_assemblies(text):
+    """Map each shell variable name to every value assigned to it in the file.
+
+    The shell analogue of python_command_assemblies, and it exists for the same
+    reason: a command can carry its flag in a variable rather than on the call
+    line. The shape is not exotic -- it is how a fence computes the very value
+    that makes it a fence:
+
+        LEASE="--force-with-lease=$REF:$OBSERVED"
+        git push "$LEASE" "$REMOTE" "$INTENDED:$REF"
+
+    A marker search over the second line alone reports that push as unfenced,
+    which is the instrument calling the strictest site in the installation the
+    offender.
+
+    Bound by variable NAME, never by proximity. File-scoped rather than
+    function-scoped, because an unadorned shell assignment has no lexical
+    scope and a narrower rule would be a fiction about the language. That
+    looseness can credit a value assigned on a branch the call never takes,
+    which is the direction that mints a false confirmed -- so the caller
+    applies it only to variables the invocation actually REFERENCES, never to
+    the file at large.
+    """
+    assemblies = {}
+    for _, segment in logical_units(text, "shell"):
+        match = _SHELL_ASSIGN.match(segment)
+        if not match:
+            continue
+        name, value = match.group(1), match.group(2)
+        assemblies.setdefault(name, []).append(value)
+    return {name: " ".join(values) for name, values in assemblies.items()}
+
+
+def resolve_shell_markers(segment, assemblies, markers):
+    """Return the first marker reachable through a variable this command uses."""
+    referenced = " ".join(
+        assemblies.get(name, "") for name in _SHELL_VAR_REF.findall(segment)
+    )
+    if not referenced:
+        return ""
+    return next((m for m in markers if m in referenced), "")
+
+
 def find_sites(text, language, matchers):
     """Yield (start_line, segment) for every unit matching any matcher.
 
@@ -494,14 +569,28 @@ def probe_effect(effect_probe, files):
     markers = identity.get("markers") or []
     call_site = effect_probe.get("call_site") or {}
 
+    fences = identity.get("fenced_by") or []
+    # A fence declaration has to widen DETECTION, not only reclassify what the
+    # bare-verb pattern happened to catch. Measured on this city: the scripted
+    # pattern `\bgit\b[^|;&]*\bpush\b` matches `git-push-fenced` by accident
+    # of the hyphen, while the instructed pattern `\bgit push\b` (literal
+    # space) does not -- so the five formula sites that adopted the fence did
+    # not join the unkeyed count, they DISAPPEARED from the effect. Reporting
+    # fewer call sites because somebody fixed them is the same inversion as
+    # reporting them unkeyed, one step further along: the count that gets
+    # reviewed is now wrong about how much of the factory performs the effect.
+    fence_matchers = [
+        {"regex": fence["command"]} for fence in fences if fence.get("command")
+    ]
+
     groups = []
     for kind in ("scripted", "instructed", "harness"):
         group = call_site.get(kind) or {}
         matchers = group.get("any_of") or []
         if matchers:
-            groups.append((kind, matchers, group.get("path_globs")))
+            groups.append((kind, matchers + fence_matchers, group.get("path_globs")))
     if not groups and call_site.get("any_of"):
-        groups.append(("scripted", call_site["any_of"], None))
+        groups.append(("scripted", call_site["any_of"] + fence_matchers, None))
 
     for kind, matchers, path_globs in groups:
         _collect(evidence, files, kind, matchers, path_globs, markers)
@@ -513,14 +602,83 @@ def probe_effect(effect_probe, files):
         for site in evidence.sites:
             if site.kind == "scripted" and _matches_any(site.path, harness_globs):
                 site.kind = "harness"
+
+    _apply_fences(evidence, fences)
     return evidence
+
+
+def _apply_fences(evidence, fences):
+    """Credit call sites that route the effect through a declared fence.
+
+    Without this, adopting a fence makes an installation score WORSE. The
+    wrapper name matches the bare-verb pattern (`git-push-fenced` contains both
+    `git` and `push`), the marker is inside the wrapper rather than on the call
+    line, and so every site that did the right thing joins the unkeyed count.
+    An instrument that cannot see a fix is worse than no instrument: it tells
+    the person who fixed it that nothing happened.
+
+    What is NOT done here is take the fence's word for it. A fence entry names
+    the command AND the file that implements it, and the implementation stays
+    an ordinary scripted call site that must carry the marker itself. So the
+    credit is transitive from one measured place rather than declared:
+
+      wrapper carries the marker  -> every call site of it carries the identity
+      wrapper does not           -> every call site of it loses the identity,
+                                    and the reason names the wrapper
+
+    That is the real reliability argument for a fence stated as a measurement:
+    N call sites collapse to one place worth checking, and the tool checks it.
+    """
+    for fence in fences:
+        command = fence.get("command")
+        if not command:
+            continue
+        implementation = fence.get("implementation") or []
+        implementation_sites = [
+            s for s in evidence.sites if _matches_any(s.path, implementation)
+        ]
+        # An empty implementation set is a probe-pack error, not a pass. A
+        # fence nobody can point at is a claim, and claims are what the
+        # derivation exists to replace -- so it credits nothing.
+        #
+        # ANY rather than ALL, and the choice is load-bearing. The right rule is
+        # "every real call in the wrapper pins the lease", and that is what ALL
+        # says -- but the detector cannot yet tell a call from a MENTION, and a
+        # wrapper mentions its own name constantly (`ME=git-push-fenced`, a name
+        # inside a sed program). Measured here: ALL made `carried` false for
+        # both fences on this city, so all twelve sites that adopted them read
+        # "does not carry it" and the instrument inverted a second time on the
+        # very fix it was written to see. The two rules agree once mention
+        # detection lands, because the wrapper then has exactly one detected
+        # site; until then ANY is the one that is wrong in the safe direction.
+        # The residual is not hidden: the evidence line below carries the split,
+        # so a wrapper with one leased push and one bare push reads "1 of 2".
+        carrying = [s for s in implementation_sites if s.has_identity]
+        carried = bool(carrying)
+        implementation_paths = {s.path for s in implementation_sites}
+        for site in evidence.sites:
+            if site.path in implementation_paths:
+                continue
+            if site.kind == "harness":
+                continue
+            if not re.search(command, site.text):
+                continue
+            site.kind = "fenced"
+            site.has_identity = carried
+            label = fence.get("name", command)
+            site.identity_evidence = (
+                "carried by %s (%d of %d site(s) in its implementation pin it)"
+                % (label, len(carrying), len(implementation_sites))
+                if carried
+                else "%s does not carry it" % label
+            )
 
 
 # Which classification wins when a file matches more than one group's
 # path_globs. Kept explicit because the alternative is whichever group the
 # loop reached last, which is a property of dictionary order rather than of
 # the installation.
-_KIND_PRECEDENCE = {"harness": 0, "instructed": 1, "scripted": 2}
+_KIND_PRECEDENCE = {"harness": 0, "fenced": 1, "instructed": 2, "scripted": 3}
 
 
 def _resolve_overlaps(sites):
@@ -560,6 +718,7 @@ def _collect(evidence, files, kind, matchers, path_globs, markers):
     for rel, text, language in files:
         if path_globs and not _matches_any(rel, path_globs):
             continue
+        shell_vars = None
         for line_no, segment in find_sites(text, language, matchers):
             # The marker must be inside this invocation's own segment. A marker
             # anywhere else -- the next command in the pipeline, a trailing
@@ -567,6 +726,12 @@ def _collect(evidence, files, kind, matchers, path_globs, markers):
             # one, and counting it is exactly how a false confirmed is minted.
             found = next((m for m in markers if m in segment), "")
             evidence_text = found
+            if not found and language in ("shell", "unknown"):
+                if shell_vars is None:
+                    shell_vars = shell_variable_assemblies(text)
+                found = resolve_shell_markers(segment, shell_vars, markers)
+                if found:
+                    evidence_text = found + " (assigned to a variable this command uses)"
             if not found and language == "python":
                 # The same command, assembled over several statements. Bound by
                 # variable and scope, never by proximity.

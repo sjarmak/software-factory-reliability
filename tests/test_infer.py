@@ -688,3 +688,227 @@ def elsewhere(command):
 '''
     value, reason = _identity(tmp_path, {"bin/poster": source})
     assert value == "unknown", reason
+
+
+# --------------------------------------------------------------------------
+# Fenced call sites.
+#
+# The defect these cover, measured on the live installation on 2026-08-18:
+# adopting a fence made the score WORSE. `git-push-fenced` matches the bare
+# verb pattern (the name contains both "git" and "push"), the identity marker
+# lives inside the wrapper rather than on the call line, and so all nineteen
+# scripted sites -- including the fence itself -- were reported as carrying no
+# expected_remote_ref. An instrument that cannot see a fix tells the person who
+# made it that nothing happened.
+# --------------------------------------------------------------------------
+
+FENCE_PROBES = """\
+version: factory.probes/v1
+name: control
+factory_name: control
+scan:
+  include_globs: ["bin/*", "formulas/*.toml"]
+effects:
+  - name: git_push
+    destination: code_host
+    call_site:
+      harness_globs: ["bin/*.test"]
+      scripted:
+        path_globs: ["bin/*"]
+        any_of:
+          - regex: '\\bgit\\b[^|;&]*\\bpush\\b'
+            languages: [shell, unknown]
+      instructed:
+        path_globs: ["formulas/*.toml"]
+        any_of:
+          - regex: '\\bgit push\\b'
+    identity:
+      name: expected_remote_ref
+      markers: ["--force-with-lease="]
+      fenced_by:
+        - name: git-push-fenced
+          command: '\\bgit-push-fenced\\b'
+          implementation: ["bin/git-push-fenced"]
+"""
+
+# The wrapper as it is really written: the flag is computed into a variable and
+# the push references it. A marker search over the push line alone finds
+# nothing.
+FENCE_OK = """\
+#!/usr/bin/env bash
+OBSERVED=$(git ls-remote "$REMOTE" "$REF" | awk '{print $1}')
+LEASE="--force-with-lease=$REF:$OBSERVED"
+git push "$LEASE" "$REMOTE" "$INTENDED:$REF"
+"""
+
+# The mutation: a wrapper that reads the ref back and then pushes blind. Every
+# other line is identical.
+FENCE_BROKEN = """\
+#!/usr/bin/env bash
+OBSERVED=$(git ls-remote "$REMOTE" "$REF" | awk '{print $1}')
+LEASE="$REF:$OBSERVED"
+git push "$LEASE" "$REMOTE" "$INTENDED:$REF"
+"""
+
+CALLS_FENCE = "#!/usr/bin/env bash\ngit-push-fenced --remote origin --branch main\n"
+
+
+def _fence_identity(tmp_path, files):
+    root = tmp_path / "install"
+    for rel, text in files.items():
+        path = root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    probes = tmp_path / "probes.yaml"
+    probes.write_text(FENCE_PROBES)
+    _, evidence = infer.derive(root, infer.load_probes(probes))
+    return evidence[0]
+
+
+def test_a_site_that_calls_the_fence_carries_the_identity(tmp_path):
+    item = _fence_identity(tmp_path, {
+        "bin/git-push-fenced": FENCE_OK,
+        "bin/ship": CALLS_FENCE,
+    })
+    value, reason = item.derived_identity()
+    assert value == "expected_remote_ref", reason
+    assert "through a fenced command" in reason
+    assert [s.path for s in item.fenced] == ["bin/ship"]
+
+
+def test_a_fence_that_does_not_pin_withdraws_it_from_every_caller(tmp_path):
+    """The mutation from the test above: one line of the wrapper.
+
+    This is the property that makes the credit a measurement rather than a
+    declaration. The caller is byte-identical in both tests.
+    """
+    item = _fence_identity(tmp_path, {
+        "bin/git-push-fenced": FENCE_BROKEN,
+        "bin/ship": CALLS_FENCE,
+    })
+    value, reason = item.derived_identity()
+    assert value == "unknown", reason
+    assert [s.identity_evidence for s in item.fenced] == [
+        "git-push-fenced does not carry it"
+    ]
+
+
+def test_the_fence_implementation_is_itself_a_measured_call_site(tmp_path):
+    """It is not exempted by being named in the probe pack.
+
+    Exempting it is the tempting shortcut and it is the hand-written-contract
+    shape again: the one place the identity has to exist would be the one place
+    nothing checks.
+    """
+    item = _fence_identity(tmp_path, {"bin/git-push-fenced": FENCE_OK})
+    assert [s.kind for s in item.scripted] == ["scripted"]
+    assert [s.path for s in item.scripted] == ["bin/git-push-fenced"]
+    assert item.derived_identity()[0] == "expected_remote_ref"
+
+
+def test_a_fence_with_no_implementation_in_the_tree_credits_nothing(tmp_path):
+    """A fence nobody can point at is a claim, and claims are what this
+    replaces."""
+    item = _fence_identity(tmp_path, {"bin/ship": CALLS_FENCE})
+    value, reason = item.derived_identity()
+    assert value == "unknown", reason
+    assert all(not s.has_identity for s in item.fenced)
+
+
+def test_an_instructed_site_that_names_the_fence_no_longer_withdraws_it(tmp_path):
+    """A sentence telling an agent to run the fenced command is bindable.
+
+    The usual rule -- an instructed site withdraws the identity because no
+    static marker can bind it -- holds because the agent writes the argument
+    list at run time. It does not hold when the identity is inside the command
+    being named: the agent cannot type a version of it that skips the fence.
+    """
+    item = _fence_identity(tmp_path, {
+        "bin/git-push-fenced": FENCE_OK,
+        "formulas/ship.toml": 'prompt = "then run git-push-fenced --remote origin"\n',
+    })
+    assert item.derived_identity()[0] == "expected_remote_ref"
+    assert item.instructed == []
+
+
+def test_the_same_instruction_with_the_bare_verb_still_withdraws_it(tmp_path):
+    """The mutation from the test above: `git push` in place of the fence."""
+    item = _fence_identity(tmp_path, {
+        "bin/git-push-fenced": FENCE_OK,
+        "formulas/ship.toml": 'prompt = "then run git push origin main"\n',
+    })
+    value, reason = item.derived_identity()
+    assert value == "unknown", reason
+    assert "agent instructions" in reason
+
+
+def test_a_marker_in_a_variable_the_command_does_not_use_does_not_count(tmp_path):
+    """Bound by variable name, never by proximity.
+
+    Without this the file-scoped assembly would credit any push in a file that
+    computes a lease anywhere in it, which is the direction that mints a false
+    confirmed.
+    """
+    source = """\
+#!/usr/bin/env bash
+UNUSED_LEASE="--force-with-lease=refs/heads/main:abc"
+git push "$REMOTE" "$BRANCH"
+"""
+    item = _fence_identity(tmp_path, {"bin/pusher": source})
+    value, reason = item.derived_identity()
+    assert value == "unknown", reason
+
+
+def test_a_harness_site_never_becomes_a_fenced_site(tmp_path):
+    """A test that exercises the fence must not be credited as production use,
+    and must not vanish either."""
+    item = _fence_identity(tmp_path, {
+        "bin/git-push-fenced": FENCE_OK,
+        "bin/x.test": CALLS_FENCE,
+    })
+    assert [s.path for s in item.harness] == ["bin/x.test"]
+    assert item.fenced == []
+
+
+def test_a_fence_declaration_widens_detection_it_does_not_only_reclassify(tmp_path):
+    """Adopting a fence must not make a call site DISAPPEAR from the effect.
+
+    The regression this pins, measured on the gas-city installation: the
+    scripted pattern matched `git-push-fenced` by accident of the hyphen, and
+    the instructed pattern `\\bgit push\\b` (literal space) did not. So five
+    formula sites that adopted the fence left the effect's site list entirely.
+    A count of call sites that shrinks because somebody fixed them is a worse
+    reading than one that calls them unkeyed -- the reviewer now has the wrong
+    number for how much of the factory performs the effect at all.
+    """
+    item = _fence_identity(tmp_path, {
+        "bin/git-push-fenced": FENCE_OK,
+        # `git-push-fenced` does not contain the substring `git push`, so
+        # nothing in the instructed group's own any_of can match this file.
+        "formulas/mol-ship.toml": (
+            'prompt = """\nRun:\ngit-push-fenced --remote origin --branch main\n"""\n'
+        ),
+    })
+    fenced = {site.path for site in item.fenced}
+    assert "formulas/mol-ship.toml" in fenced, [
+        (s.path, s.kind) for s in item.sites
+    ]
+
+
+def test_the_credit_line_names_how_much_of_the_implementation_pins(tmp_path):
+    """Credit survives one non-pinning line in the wrapper, and says so.
+
+    ANY rather than ALL, because the detector cannot yet tell a call from a
+    mention and a wrapper mentions its own name (`ME=git-push-fenced`). ALL
+    inverted the instrument on the real installation: both fences read "does
+    not carry it" and every adopting site lost the identity. The residual is
+    kept visible in the evidence instead of being collapsed away.
+    """
+    wrapper = FENCE_OK + 'git push "$REMOTE" "$FALLBACK"\n'
+    item = _fence_identity(tmp_path, {
+        "bin/git-push-fenced": wrapper,
+        "bin/ship": CALLS_FENCE,
+    })
+    caller = [s for s in item.fenced if s.path == "bin/ship"]
+    assert caller and caller[0].has_identity
+    assert "1 of 2 site(s) in its implementation pin it" in caller[0].identity_evidence

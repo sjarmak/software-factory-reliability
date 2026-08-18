@@ -35,6 +35,14 @@ harness_globs: &harness_globs
   - "bin/test_*.py"
   - "bin/*_test.py"
   - "bin/*-test"
+  # Every scan root needs its own harness patterns, not just bin/. These five
+  # listed bin/ alone while assets/scripts/ is also scanned, so eleven call
+  # sites in assets/scripts/prune-branches.test counted as production pushes
+  # and withdrew the git_push identity on their own.
+  - "assets/scripts/*.test"
+  - "assets/scripts/*.test.sh"
+  - "assets/scripts/test_*.py"
+  - "hooks/*.test"
 
 scan:
   include_globs:
@@ -119,6 +127,18 @@ effects:
       # Without that, a repeat is a blind overwrite rather than a repeat.
       name: expected_remote_ref
       markers: ["--force-with-lease=", "--force-with-lease "]
+      # bin/git-push-fenced IS the fence: it reads the remote ref back, pins
+      # --force-with-lease to the oid it observed, and reads back again. A site
+      # that calls it cannot carry the marker on its own line, and the bare-verb
+      # pattern above matches the wrapper's NAME (git-push-fenced contains both
+      # "git" and "push"), so before this entry every site that adopted the
+      # fence joined the unkeyed count. The implementation is not exempt: it
+      # stays an ordinary scripted site and must carry the marker itself, which
+      # it does through the LEASE variable.
+      fenced_by:
+        - name: git-push-fenced
+          command: '\bgit-push-fenced\b'
+          implementation: ["bin/git-push-fenced"]
 
   - name: open_pull_request
     destination: code_host
@@ -139,6 +159,13 @@ effects:
       # head explicitly is asking for that guarantee.
       name: head_branch
       markers: ["--head", "-H "]
+      # bin/gh-pr-create-fenced lists the head and base before it writes, so a
+      # repeat collapses to already-open, and lists again after, so the answer
+      # comes from the forge rather than from an exit code.
+      fenced_by:
+        - name: gh-pr-create-fenced
+          command: '\bgh-pr-create-fenced\b'
+          implementation: ["bin/gh-pr-create-fenced"]
 
   - name: merge_pull_request
     destination: code_host
