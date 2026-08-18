@@ -470,6 +470,13 @@ def test_reference_example_findings_are_exactly_as_documented(tmp_path):
 
 # Pages that print a literal review summary for an example. A rule change
 # that moves a count has to move the prose with it, or this fails.
+#
+# This list is curated on purpose and covers ONE direction: these pages must
+# keep carrying a count. It cannot cover the other direction, because a page
+# that quotes a count and is not listed here is exactly the case a hand-written
+# list does not know about -- which is the drift the whole guard exists for,
+# one level up. test_no_page_quotes_a_summary_that_is_no_longer_true below is
+# the other rail, and it enumerates the pages from disk instead.
 PUBLISHED_COUNTS = {
     "unsafe-factory.yaml": ("QUICKSTART.md", "examples/README.md",
                             "docs/contract-reference.md"),
@@ -494,6 +501,73 @@ def test_published_counts_match_the_examples(tmp_path):
             assert summary in (ROOT / page).read_text(), (
                 f"{page} does not contain the current summary line "
                 f"{summary!r} for {example}")
+
+
+# A review summary quoted in prose, anywhere. The marker excuses a count that
+# is deliberately out of date -- QUICKSTART cites the v0.1 figure to explain
+# why the current one differs, and that citation is the point of the sentence.
+# It is an explicit comment rather than a typographic convention (bold, a
+# blockquote) because a formatting choice made for other reasons would excuse a
+# genuinely stale number by accident, and a guard that excuses its own subject
+# is not a guard.
+_SUMMARY_IN_PROSE = re.compile(r"\d+ FAIL, \d+ WARN")
+_HISTORICAL_MARKER = "<!-- historical -->"
+
+
+def _documentation_pages():
+    """Every .md in the repository except generated output."""
+    return sorted(p for p in ROOT.rglob("*.md")
+                  if not any(part == "out" or part.startswith(".")
+                             for part in p.relative_to(ROOT).parts))
+
+
+def test_no_page_quotes_a_summary_that_is_no_longer_true(tmp_path):
+    """A count in prose is either currently true or marked as history.
+
+    The pages are enumerated from disk rather than listed, so a document that
+    starts quoting a count is covered the day it is written. PUBLISHED_COUNTS
+    above cannot do this: an unlisted page is silently uncovered there, and the
+    counts it carries are the ones nobody re-ran.
+
+    What this does NOT check is attribution: it asks whether some example still
+    produces the quoted figure, not whether the page names the right example.
+    A page swapping `5 FAIL, 8 WARN` onto the unsafe contract passes here and
+    fails in PUBLISHED_COUNTS, which is why both rails are kept.
+    """
+    live = set()
+    for relative in EXPECTED_EXAMPLE_FINDINGS:
+        result = run_cli("review", str(_example_path(relative)),
+                         "--out", str(tmp_path / relative.replace("/", "_")))
+        live.add(_summary_line(result))
+
+    pages = _documentation_pages()
+    assert pages, "no documentation pages found; the walk is broken"
+    stale = []
+    for page in pages:
+        for number, line in enumerate(page.read_text().splitlines(), 1):
+            if _HISTORICAL_MARKER in line:
+                continue
+            for quoted in _SUMMARY_IN_PROSE.findall(line):
+                if quoted not in live:
+                    stale.append(f"{page.relative_to(ROOT)}:{number}: {quoted!r} "
+                                 f"in {line.strip()[:70]!r}")
+    assert not stale, (
+        "documentation quotes review summaries no example produces:\n  "
+        + "\n  ".join(stale)
+        + "\n\nRe-run the example and correct the page, or mark the line "
+          f"{_HISTORICAL_MARKER} if the figure is cited as history.\n"
+          "Current summaries: " + ", ".join(sorted(live)))
+
+
+def test_the_historical_marker_is_the_only_thing_excusing_a_stale_count(tmp_path):
+    """The escape hatch is narrow: nothing else on a line excuses a figure."""
+    pages = _documentation_pages()
+    marked = [line for page in pages for line in page.read_text().splitlines()
+              if _HISTORICAL_MARKER in line and _SUMMARY_IN_PROSE.search(line)]
+    assert marked, (
+        "no page cites a historical count, so the escape hatch in "
+        "test_no_page_quotes_a_summary_that_is_no_longer_true is untested; "
+        "either it is unused and should be deleted, or the marker moved")
 
 
 def test_contract_reference_documents_every_rule():

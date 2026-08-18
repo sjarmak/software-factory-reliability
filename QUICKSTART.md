@@ -62,7 +62,8 @@ If you would rather find the defects yourself before the checker names them,
 [examples/README.md](examples/README.md) turns this contract into an exercise
 with the answer key folded away.
 
-Older write-ups quote **6 FAIL, 9 WARN** for this contract. That was correct
+Older write-ups quote **6 FAIL, 9 WARN** for this contract. <!-- historical -->
+That was correct
 at v0.1 (`4744374`); `03e36b8` added the CODE-000 rule and the tenth warning
 came with it. Until 2026-08-16 the suite pinned the rule multiset but nothing
 compared it to the numbers printed on this page, so this line was updated by
