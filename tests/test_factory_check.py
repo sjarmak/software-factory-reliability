@@ -389,7 +389,7 @@ def test_effect001_and_effect002_flag_undecided_identity_and_retry():
 
 
 def test_effect002_accepts_only_the_decided_retry_contracts():
-    for contract in ("deduplicate", "converge", "reconcile"):
+    for contract in ("deduplicate", "converge", "reconcile", "at_least_once"):
         doc = {"effects": [{"name": "notify", "destination": "messaging",
                             "effect_identity": "notification_id",
                             "retry_contract": contract,
@@ -820,3 +820,182 @@ def test_the_effect_matrix_distinguishes_two_contracts_by_their_key(tmp_path):
     matrix = (tmp_path / "effect-matrix.md").read_text()
     assert "Identity key" in matrix
     assert "notify_dedupe_key" in matrix
+
+
+def test_at_least_once_is_a_decided_value_not_an_undecided_one(tmp_path):
+    """A destination with no dedup property leaves a builder three values that
+    are all false and "unknown", which records "the builder has not decided"
+    when the truth is "we decided and repeats duplicate". Declaring the bad
+    answer must clear EFFECT-002 -- otherwise the honest record and the empty
+    one read the same, and nobody writes the honest one."""
+    clean = ISSUE_TO_PR.read_text()
+    doc = tmp_path / "at-least-once.yaml"
+    doc.write_text(clean.replace(
+        "    retry_contract: deduplicate",
+        "    retry_contract: at_least_once\n"
+        "    duplicate_disposition: a second copy posts as a new message", 1))
+    result = run_cli("review", str(doc), "--out", str(tmp_path))
+    ids = [line.split()[1] for line in result.stdout.splitlines()
+           if line.startswith(("FAIL ", "WARN "))]
+    assert "EFFECT-002" not in ids, result.stdout
+    assert "EFFECT-005" not in ids, result.stdout
+
+
+def test_at_least_once_without_a_disposition_fails(tmp_path):
+    """The other rail, and the reason the value is not just a green escape from
+    EFFECT-002. Saying repeats duplicate and not saying what a duplicate costs
+    is a decided answer with the consequence left off."""
+    clean = ISSUE_TO_PR.read_text()
+    doc = tmp_path / "at-least-once-bare.yaml"
+    doc.write_text(clean.replace(
+        "    retry_contract: deduplicate",
+        "    retry_contract: at_least_once", 1))
+    result = run_cli("review", str(doc), "--out", str(tmp_path))
+    ids = [line.split()[1] for line in result.stdout.splitlines()
+           if line.startswith("FAIL ")]
+    assert "EFFECT-005" in ids, result.stdout
+    # The finding has to name the field to add. A reader told only that the
+    # value is wrong cannot tell what the tool wants written -- and the
+    # machine-readable path is asserted too, because a finding whose printed
+    # hint says duplicate_disposition while its structured path points at
+    # retry_contract sends any tool built on findings.json to the wrong field.
+    assert "duplicate_disposition" in result.stdout, result.stdout
+    findings = json.loads((tmp_path / "findings.json").read_text())
+    paths = [f["path"] for f in findings if f["rule"] == "EFFECT-005"]
+    assert paths and all(p.endswith(".duplicate_disposition") for p in paths), paths
+
+
+def test_an_undecided_disposition_is_not_a_disposition(tmp_path):
+    """"unknown" is accepted by the schema everywhere a builder has not decided.
+    A rule that only checks the key is present accepts it as an answer, which is
+    the scaffold's own placeholder reading as a decision."""
+    clean = ISSUE_TO_PR.read_text()
+    doc = tmp_path / "at-least-once-unknown.yaml"
+    doc.write_text(clean.replace(
+        "    retry_contract: deduplicate",
+        "    retry_contract: at_least_once\n"
+        "    duplicate_disposition: unknown", 1))
+    result = run_cli("review", str(doc), "--out", str(tmp_path))
+    ids = [line.split()[1] for line in result.stdout.splitlines()
+           if line.startswith("FAIL ")]
+    assert "EFFECT-005" in ids, result.stdout
+
+
+def test_a_disposition_without_at_least_once_fires_nothing(tmp_path):
+    """EFFECT-005 is scoped to the contract value, not to the field. Documenting
+    what a duplicate would do on an effect that claims the destination collapses
+    repeats is extra honesty, and a rule scoped the other way round reads it as
+    a contradiction and fires -- which teaches builders to write less."""
+    clean = ISSUE_TO_PR.read_text()
+    doc = tmp_path / "disposition-only.yaml"
+    doc.write_text(clean.replace(
+        "    retry_contract: deduplicate",
+        "    retry_contract: deduplicate\n"
+        "    duplicate_disposition: cannot happen; the destination collapses it", 1))
+    result = run_cli("review", str(doc), "--out", str(tmp_path))
+    assert "EFFECT-005" not in result.stdout, result.stdout
+
+
+def test_the_matrix_spells_out_what_a_duplicate_costs(tmp_path):
+    """A row reading at_least_once says only that a repeat lands. Without the
+    bound beside it that reads as a shrug, and the disposition is the whole
+    answer to what a retry costs at this destination."""
+    clean = ISSUE_TO_PR.read_text()
+    doc = tmp_path / "dup.yaml"
+    doc.write_text(clean.replace(
+        "    retry_contract: deduplicate",
+        "    retry_contract: at_least_once\n"
+        "    duplicate_disposition: a second copy posts as a new message in the channel", 1))
+    run_cli("render", str(doc), "--out", str(tmp_path))
+    matrix = (tmp_path / "effect-matrix.md").read_text()
+    assert "Effects that duplicate on a repeat" in matrix
+    # The cost has to sit on the same line as the effect it belongs to. A
+    # section listing three dispositions with no names attached tells a reader
+    # that something duplicates and not which thing, which is not usable in the
+    # incident this section exists for.
+    priced = [line for line in matrix.splitlines()
+              if "a second copy posts as a new message in the channel" in line]
+    assert len(priced) == 1, matrix
+    assert "send_notification" in priced[0], priced[0]
+
+
+def test_the_duplicate_section_is_absent_when_nothing_duplicates(tmp_path):
+    """The other rail. A heading that is always there stops meaning anything,
+    and a reader scanning for it learns to skip it.
+
+    Two fixtures, because one of them only proves the section can be absent. The
+    second is the case that separates "selects on the retry contract" from
+    "selects on the field being present": an effect whose destination collapses
+    repeats may still document what a duplicate WOULD cost, and listing it under
+    a heading that says it duplicates is a false statement about the system."""
+    run_cli("render", str(ISSUE_TO_PR), "--out", str(tmp_path))
+    matrix = (tmp_path / "effect-matrix.md").read_text()
+    assert "Effects that duplicate on a repeat" not in matrix
+
+    documented = tmp_path / "documented-but-collapsed.yaml"
+    documented.write_text(ISSUE_TO_PR.read_text().replace(
+        "    retry_contract: deduplicate",
+        "    retry_contract: deduplicate\n"
+        "    duplicate_disposition: cannot happen; the destination collapses it",
+        1))
+    out = tmp_path / "documented"
+    run_cli("render", str(documented), "--out", str(out))
+    matrix = (out / "effect-matrix.md").read_text()
+    assert "Effects that duplicate on a repeat" not in matrix, matrix
+
+
+def test_the_three_definitions_of_the_retry_grammar_agree():
+    """The set of retry contracts is written down three times: once in the rule
+    module, once in the standalone effect schema, once inlined in the factory
+    schema. Nothing makes a change to one propagate to the others, so a value
+    added in the place a developer happens to open is accepted by one lane and
+    refused by another. Asserting equality is the only thing that notices.
+
+    "unknown" is in the schemas and deliberately out of the runtime's decided
+    set -- that is what makes EFFECT-002 fire on it -- so the comparison adds it
+    back rather than pretending the two sets are identical."""
+    def enum_of(path, key):
+        node = json.loads((ROOT / "schemas" / path).read_text())
+        found = []
+
+        def walk(obj):
+            if isinstance(obj, dict):
+                if key in obj and isinstance(obj[key], dict) \
+                        and "enum" in obj[key]:
+                    found.append(frozenset(obj[key]["enum"]))
+                for value in obj.values():
+                    walk(value)
+            elif isinstance(obj, list):
+                for value in obj:
+                    walk(value)
+
+        walk(node)
+        assert len(found) == 1, "%s: expected one %s enum, found %d" % (
+            path, key, len(found))
+        return set(found[0])
+
+    effect_enum = enum_of("effect.schema.json", "retry_contract")
+    factory_enum = enum_of("factory.schema.json", "retry_contract")
+    expected = rules_mod.ALLOWED_RETRY_CONTRACTS | {"unknown"}
+    assert effect_enum == expected, effect_enum ^ expected
+    assert factory_enum == expected, factory_enum ^ expected
+
+
+def test_a_whitespace_disposition_is_not_a_disposition(tmp_path):
+    """The hole a stripped predicate closes. A field holding one space is
+    schema-valid (minLength counts the space) and, before _declared stripped,
+    read as declared -- so the space bar cleared a rule whose entire purpose is
+    to separate the builder who wrote the cost down from the builder who did
+    not. " unknown " is the same hole with a different disguise."""
+    clean = ISSUE_TO_PR.read_text()
+    for label, value in (("space", " "), ("padded-unknown", " unknown ")):
+        doc = tmp_path / ("at-least-once-%s.yaml" % label)
+        doc.write_text(clean.replace(
+            "    retry_contract: deduplicate",
+            "    retry_contract: at_least_once\n"
+            "    duplicate_disposition: \"%s\"" % value, 1))
+        out = tmp_path / label
+        result = run_cli("review", str(doc), "--out", str(out))
+        ids = [line.split()[1] for line in result.stdout.splitlines()
+               if line.startswith("FAIL ")]
+        assert "EFFECT-005" in ids, "%s: %s" % (label, result.stdout)

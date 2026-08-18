@@ -375,9 +375,15 @@
             "deduplicate",
             "converge",
             "reconcile",
+            "at_least_once",
             "unknown"
           ],
-          "description": "What holds when the same effect_identity is submitted more than once. deduplicate: the destination atomically stores the identity with the effect and returns the original receipt for repeats. converge: the operation is idempotent, so repeating it reaches the same final state. reconcile: the caller queries the destination for a prior effect (see readback) before repeating; weaker than destination deduplication, and it assumes callers for one identity are serialized. \"unknown\" records that the builder has not decided; the review rules flag it."
+          "description": "What holds when the same effect_identity is submitted more than once. deduplicate: the destination atomically stores the identity with the effect and returns the original receipt for repeats. converge: the operation is idempotent, so repeating it reaches the same final state. reconcile: the caller queries the destination for a prior effect (see readback) before repeating; weaker than destination deduplication, and it assumes callers for one identity are serialized. at_least_once: the destination has no dedup property and a repeat lands as a second copy; that is a decided answer, not an undecided one, and it requires duplicate_disposition. \"unknown\" records that the builder has not decided; the review rules flag it."
+        },
+        "duplicate_disposition": {
+          "type": "string",
+          "minLength": 1,
+          "description": "What a second copy of this effect does at the destination, and what bounds it. The review rules require this field whenever retry_contract is at_least_once, where a repeat is known to land rather than being collapsed; the schema does not, so a contract missing it is schema-valid and fails review. What is checked is that the field is filled in -- whether the prose is true, and whether the bound it names is real, is a reader's judgement and not a machine's. Use \"unknown\" if not yet decided; the review rules flag it."
         },
         "readback": {
           "type": "string",

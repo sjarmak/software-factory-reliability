@@ -15,12 +15,19 @@ a one-line remediation hint; a run exits 1 on any FAIL, or on any WARN under
 3. Is each effect identity stable across retries: derived from the logical
    work and the effect's place in it, never from the attempt? [IDENT-002]
 4. Does each effect declare a `retry_contract`, and is it one of
-   `deduplicate`, `converge`, or `reconcile`? [EFFECT-002]
+   `deduplicate`, `converge`, `reconcile`, or `at_least_once`? [EFFECT-002]
+   If the destination has no dedup property, `at_least_once` is the honest
+   answer and it requires a `duplicate_disposition`. [EFFECT-005]
 5. Does the chosen contract match the destination's actual capability? A
    `deduplicate` contract requires the destination to atomically store the
    effect identity with the applied effect and return the stored receipt on
    repeat; a destination that merely "usually ignores duplicates" does not
-   qualify. [EFFECT-002]
+   qualify. No rule can answer this -- `EFFECT-002` checks only that the value
+   is one of the decided ones, so a wrong-but-decided contract passes it. This
+   question is why the checklist exists.
+5a. If the contract is `at_least_once`, read the `duplicate_disposition` and ask
+   whether the factory can live with what it describes. `EFFECT-005` checks that
+   the field is filled in, never that the sentence is true or the bound real.
 6. Does each effect declare an `unknown_state_policy`, and is it neither
    `assume_success` nor `assume_failure`? Assumed success loses work; assumed
    failure repeats the effect. The policy must name what happens instead:

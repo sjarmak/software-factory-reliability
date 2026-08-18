@@ -68,7 +68,7 @@ effects:
   - name: open_change_request
     destination: code_host
     effect_identity: change_request_key  # stable across retries; never attempt-scoped
-    retry_contract: unknown              # decide deduplicate, converge, or reconcile
+    retry_contract: unknown              # deduplicate, converge, reconcile, at_least_once
     unknown_state_policy: unknown        # decide block_and_escalate, reconcile_then_block, or manual_review
 
 # Sections still to declare: authorities, reconciliation, scheduling,

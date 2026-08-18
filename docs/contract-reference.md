@@ -29,7 +29,7 @@ valid and fail eleven rules; the deliberately unsafe example in
 | `authorities` | no | which system is authoritative for facts, procedure, policy, and effects | `AUTH-000` |
 | `work` | no | the three identity classes, the ownership generation, the lease, and the fence | `IDENT-001`, `AUTH-001`, `AUTH-002` |
 | `artifacts` | no | artifact identity, verification binding, and publication conditions | `VERIFY-001` to `VERIFY-005` |
-| `effects` | no | one entry per class of external mutation, with its identity, retry contract, and unknown-state policy | `EFFECT-000` to `EFFECT-004`, `IDENT-002` |
+| `effects` | no | one entry per class of external mutation, with its identity, retry contract, and unknown-state policy | `EFFECT-000` to `EFFECT-005`, `IDENT-002` |
 | `reconciliation` | no | the level-triggered loops that reread external truth | `RECON-001`, `RECON-002` |
 | `scheduling` | no | how execution capacity is partitioned and made fair | `FLEET-001` to `FLEET-003` |
 | `code_estate` | no | how the factory names the code it operates on (repository plus revision) | `CODE-000` |
@@ -43,7 +43,7 @@ an incident review.
 
 ## Rule catalog
 
-Twenty-three rules. FAIL means the contract describes a system with an open
+Twenty-four rules. FAIL means the contract describes a system with an open
 failure boundary. WARN means the contract leaves something undecided that will
 be decided under pressure later.
 
@@ -76,10 +76,53 @@ and only `compare-and-set` or `transactional` as an operation.
 | `EFFECT-002` | FAIL | an effect's `retry_contract` is missing or `unknown`; retries redeliver work and the destination's behavior on a repeat is undefined | [effect-identity](../patterns/effect-identity.md) |
 | `EFFECT-003` | FAIL | an effect's `unknown_state_policy` is undecided, `assume_success`, or `assume_failure`; one loses the effect and the other duplicates it | [explicit-unknown-state](../patterns/explicit-unknown-state.md) |
 | `EFFECT-004` | WARN | an effect declares `retry_contract: reconcile` with no readback query, so a retry cannot ask the destination whether the prior attempt landed | [durable-intent](../patterns/durable-intent.md) |
+| `EFFECT-005` | FAIL | an effect declares `retry_contract: at_least_once` with no `duplicate_disposition`, so a repeat is known to land as a second copy and nothing states what that costs | [effect-identity](../patterns/effect-identity.md) |
 
-Accepted `retry_contract` values are `deduplicate`, `converge`, and
-`reconcile`. Accepted `unknown_state_policy` values are `block_and_escalate`,
-`reconcile_then_block`, and `manual_review`.
+Accepted `retry_contract` values are `deduplicate`, `converge`, `reconcile`,
+and `at_least_once`. Accepted `unknown_state_policy` values are
+`block_and_escalate`, `reconcile_then_block`, and `manual_review`.
+
+#### When the destination has no dedup property
+
+`deduplicate` is a claim about the **destination**: it stores the identity with
+the effect and returns the original receipt for a repeat. Plenty of real
+destinations have no such property. Posting a chat message twice posts twice;
+the API takes no idempotency key and would ignore one.
+
+For those, the first three values are all false and the honest-looking
+alternative is `unknown`, which says *the builder has not decided*. That is the
+wrong record. The builder decided, and the answer is that repeats duplicate.
+
+`at_least_once` is that answer. It is a decided value, and `EFFECT-005` requires
+`duplicate_disposition` beside it: what a second copy does at the destination
+and what bounds it.
+
+What `EFFECT-005` checks is that the field is filled in with something other
+than `unknown`. It does not, and cannot, check that the sentence is true or that
+the bound it names is real -- reading `a second copy posts as a new message` and
+deciding whether the factory can live with that is a human's job, and a rule
+that scored the prose would be guessing. So a green `EFFECT-005` means the cost
+is *written down where a reviewer will see it*, which is the whole claim. The
+review checklist in `docs/reviews/effect-boundary-review.md` is where the
+sentence gets read.
+
+```yaml
+- name: slack_publish
+  destination: messaging
+  effect_identity: idempotency_key
+  retry_contract: at_least_once
+  duplicate_disposition: >-
+    a second copy posts as a new message in the channel; the publisher replays a
+    delivered receipt for the same key for two minutes in one process, which
+    covers a request-timeout retry and nothing longer
+  unknown_state_policy: block_and_escalate
+```
+
+A caller-side cache is not `deduplicate`, and the distinction is the same one
+`AUTH-002` makes about fences: a guarantee enforced by the caller is only as
+durable as that process. Write the cache in `duplicate_disposition`, where it is
+visible as a bound on the damage, rather than in `retry_contract`, where it
+reads as a property the destination does not have.
 
 #### `effect_identity` is prose; `effect_identity_key` is a token
 

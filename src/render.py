@@ -127,6 +127,19 @@ def effect_matrix(doc):
             ", ".join(c for c in covering if c) or "none",
         ]
         lines.append("| " + " | ".join(row) + " |")
+    # Effects that duplicate get their disposition spelled out under the table
+    # rather than squeezed into a cell. It is a sentence, and it is the whole
+    # answer to "what does a retry cost here" -- the row above says only that a
+    # repeat lands, which reads as a shrug without the bound beside it.
+    duplicating = [e for e in effects
+                   if isinstance(e, dict) and e.get("retry_contract") == "at_least_once"]
+    if duplicating:
+        lines.extend(["", "## Effects that duplicate on a repeat", ""])
+        for effect in duplicating:
+            lines.append("- **%s** -> %s: %s" % (
+                effect.get("name", "not declared"),
+                effect.get("destination", "not declared"),
+                effect.get("duplicate_disposition") or "no disposition declared"))
     return "\n".join(lines) + "\n"
 
 

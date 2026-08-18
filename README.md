@@ -175,7 +175,7 @@ letting the word CONFIRMED carry a claim no scanner can make.
 
 [QUICKSTART.md](QUICKSTART.md) walks the full first session under an hour, and
 [`docs/contract-reference.md`](docs/contract-reference.md) documents every
-section and all twenty-three rules.
+section and all twenty-four rules.
 
 ## What is in here
 

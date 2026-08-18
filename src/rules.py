@@ -29,7 +29,7 @@ class Finding:
 
 SAFE_ENFORCERS = {"publisher", "destination", "store"}
 SAFE_OPERATIONS = {"compare-and-set", "transactional"}
-ALLOWED_RETRY_CONTRACTS = {"deduplicate", "converge", "reconcile"}
+ALLOWED_RETRY_CONTRACTS = {"deduplicate", "converge", "reconcile", "at_least_once"}
 UNSOUND_POLICIES = {"assume_success", "assume_failure"}
 CANONICAL_PROMISES = [
     "ready_to_claim",
@@ -54,7 +54,17 @@ def tokens(text):
 
 
 def _declared(value):
-    return isinstance(value, str) and bool(value) and value != "unknown"
+    # Stripped before both tests, and the reason is not tidiness. A field whose
+    # whole content is whitespace carries the same information as an absent one,
+    # and " unknown " carries the same information as "unknown" -- so if either
+    # counted as declared, a contract could clear every not-declared rule in
+    # this file with a space bar. That is the exact collapse these rules exist
+    # to prevent: the builder who looked and the builder who did not must not
+    # produce the same record.
+    if not isinstance(value, str):
+        return False
+    value = value.strip()
+    return bool(value) and value != "unknown"
 
 
 def _get_dict(container, key):
@@ -244,7 +254,7 @@ def _check_effects(doc, work, findings):
             findings.append(Finding(
                 "EFFECT-002", "FAIL",
                 f"Effect {name} has retry_contract {contract!r}; retries redeliver work, and the destination's behavior on a repeat is undefined.",
-                "Decide deduplicate, converge, or reconcile for this destination.",
+                "Decide deduplicate, converge, reconcile, or at_least_once for this destination.",
                 f"{path}.retry_contract"))
         policy = effect.get("unknown_state_policy")
         if policy in UNSOUND_POLICIES:
@@ -259,6 +269,18 @@ def _check_effects(doc, work, findings):
                 f"Effect {name} has an undecided unknown_state_policy; an ambiguous outcome will be resolved ad hoc under incident pressure.",
                 "Decide block_and_escalate, reconcile_then_block, or manual_review before the ambiguity happens.",
                 f"{path}.unknown_state_policy"))
+        # at_least_once is a DECIDED value whose answer is bad, and the enum
+        # had no way to say that. A destination with no dedup property leaves
+        # a builder three values that are all false and "unknown", which reads
+        # as "you have not decided" when the truth is "we decided and repeats
+        # duplicate". Recording the bad answer is strictly more information
+        # than recording no answer, and it must not be silently green either.
+        if contract == "at_least_once" and not _declared(effect.get("duplicate_disposition")):
+            findings.append(Finding(
+                "EFFECT-005", "FAIL",
+                f"Effect {name} declares retry_contract at_least_once and does not say what a duplicate costs; a repeat reaches the destination and nothing here states whether that is acceptable.",
+                "Declare duplicate_disposition: what a second copy does at the destination, and what bounds it.",
+                f"{path}.duplicate_disposition"))
         if contract == "reconcile" and not _declared(effect.get("readback")):
             findings.append(Finding(
                 "EFFECT-004", "WARN",
