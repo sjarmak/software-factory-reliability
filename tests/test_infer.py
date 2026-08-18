@@ -1631,3 +1631,190 @@ def test_the_emitted_contract_still_validates(tmp_path):
     status = factory_check._validate_one(path, {})
     assert status == "ok", status
     yaml.safe_load(text)
+
+
+def test_the_emitted_contract_names_every_section_it_did_not_derive(tmp_path):
+    """The kit's claim about itself, made checkable.
+
+    "Derived where it can be, hand-written only where it cannot" is the
+    constraint the pack is built to satisfy, and until this block existed the
+    generated file simply stopped after `effects:` -- leaving a reader to
+    discover the other eight sections by running review and reading failures.
+    Silence about a gap and the absence of a gap look identical in a file.
+
+    Mutation that flips it, measured: drop the `why` line from the emitter
+    and keep the section names. The file still lists all eight, and the
+    list is then homework with no explanation -- the version a reader
+    files a bug against.
+    """
+    sys.path.insert(0, str(ROOT / "src"))
+    import factory_check
+
+    root, probes = _install(tmp_path, {"bin/poster": KEYED})
+    contract, evidence = infer.derive(root, infer.load_probes(probes))
+    text = factory_check._emit_derived_yaml(contract, evidence)
+
+    for name, answers, why in factory_check._HAND_WRITTEN_SECTIONS:
+        assert "# %s:" % name in text, "%s is not named in the emitted file" % name
+        # The REASON too, not only the name. A list of section names is a list
+        # of homework; the sentence saying why a scan cannot answer it is the
+        # part that stops someone from filing a bug against the derivation.
+        assert why.split(".")[0][:40] in text, "%s has no stated reason" % name
+    for name in factory_check._DERIVED_SECTIONS:
+        assert name in text
+
+
+def test_a_schema_section_nobody_classified_stops_the_run(tmp_path, monkeypatch):
+    """Both rails of the coverage guard, because one rail is not a guard.
+
+    Red: a section in the schema that neither list mentions. Green: the real
+    lists against the real schema, which is the assertion in the test above
+    and is re-stated here so a guard that can never fire would fail HERE
+    rather than pass quietly in both tests.
+
+    Mutation that flips it, measured: delete the coverage check from
+    _emit_derived_yaml. Every other test stays green -- the emitted file
+    is still well-formed and still validates -- which is why the check has
+    to be asserted rather than assumed from a passing suite.
+    """
+    sys.path.insert(0, str(ROOT / "src"))
+    import factory_check
+
+    root, probes = _install(tmp_path, {"bin/poster": KEYED})
+    contract, evidence = infer.derive(root, infer.load_probes(probes))
+
+    # Green rail first, on the unmutated lists.
+    factory_check._emit_derived_yaml(contract, evidence)
+
+    # Red rail: drop one classified section and the schema now has a section
+    # nothing accounts for. Dropping from the hand-written list rather than
+    # adding to the schema keeps the check pointed at the real schema file.
+    monkeypatch.setattr(
+        factory_check, "_HAND_WRITTEN_SECTIONS",
+        [s for s in factory_check._HAND_WRITTEN_SECTIONS if s[0] != "work"])
+    contract, evidence = infer.derive(root, infer.load_probes(probes))
+    with pytest.raises(AssertionError) as caught:
+        factory_check._emit_derived_yaml(contract, evidence)
+    assert "unclassified ['work']" in str(caught.value)
+
+    # And the other direction: a name classified that the schema does not have.
+    monkeypatch.setattr(
+        factory_check, "_DERIVED_SECTIONS",
+        factory_check._DERIVED_SECTIONS + ("invented",))
+    contract, evidence = infer.derive(root, infer.load_probes(probes))
+    with pytest.raises(AssertionError) as caught:
+        factory_check._emit_derived_yaml(contract, evidence)
+    assert "invented" in str(caught.value)
+
+
+# The classification, pinned. Read from the module, both new tests above pass
+# for a mutated module: move `artifacts` from the hand-written list to the
+# derived one and the loops iterate the MUTATED tuples, so the file they check
+# agrees with itself and says a section is derived that nothing derives. The
+# only assertion that catches that is one written down here, away from the
+# thing it constrains. Reason strings are pinned WHOLE for the same reason a
+# 40-character prefix is not enough: a prefix taken from the value under test
+# is satisfied by any edit past character 40.
+_EXPECTED_DERIVED = ("version", "factory", "effects")
+
+_EXPECTED_HAND_WRITTEN = {
+    "work": "A scan can list the columns a store has. It cannot tell you which"
+            " of them is the attempt identity -- that is what the column MEANS,"
+            " and the store does not record meanings.",
+    "authorities": "A decision about your architecture. Nothing in the tree"
+                   " records it, and two installations with identical files can"
+                   " have made it differently.",
+    "artifacts": "The identity is a choice between a commit digest, a content"
+                 " hash, and a mutable reference; the publication conditions"
+                 " are a policy.",
+    "observability": "An instrument's existence is visible. Whether it watches"
+                     " a transition END TO END is a claim about what it would"
+                     " catch, which only a test that breaks the transition can"
+                     " settle.",
+    "scheduling": "Capacity and fairness are policy. On some installations a"
+                  " scheduler config states them; on others they live in an"
+                  " operator's head, and a derivation that read the first case"
+                  " would report silence for the second as though the policy"
+                  " did not exist.",
+    "reconciliation": "A procedure, not a call site.",
+    "campaigns": "A rule you choose. The schema accepts several styles"
+                 " precisely because installations disagree about it.",
+    "code_estate": "Optional, and a matter of intent rather than of what"
+                   " happens to be checked out next to the contract.",
+}
+
+
+def test_which_sections_are_derived_is_pinned_here_not_read_back(tmp_path):
+    """A section may not change sides without this file changing with it.
+
+    Mutation that flips it, measured: move ("artifacts", ...) from
+    _HAND_WRITTEN_SECTIONS into _DERIVED_SECTIONS. The emitted file then
+    claims artifacts is carried while nothing produces it, and both of the
+    tests above stay green because they read the same tuples they check.
+    Second mutation, also measured: reword any `why` past its first 40
+    characters -- the prefix assertion above cannot see it.
+    """
+    sys.path.insert(0, str(ROOT / "src"))
+    import factory_check
+
+    assert tuple(factory_check._DERIVED_SECTIONS) == _EXPECTED_DERIVED
+    assert {n: w for n, _, w in factory_check._HAND_WRITTEN_SECTIONS} \
+        == _EXPECTED_HAND_WRITTEN
+
+    root, probes = _install(tmp_path, {"bin/poster": KEYED})
+    contract, evidence = infer.derive(root, infer.load_probes(probes))
+    text = factory_check._emit_derived_yaml(contract, evidence)
+    for name, why in _EXPECTED_HAND_WRITTEN.items():
+        assert "# %s:" % name in text
+        # The wrapped block breaks the reason across comment lines, so strip
+        # the `#` gutter and collapse whitespace rather than reflowing the
+        # expectation to match today's wrap width.
+        flat = " ".join(re.sub(r"(?m)^#", " ", text).split())
+        assert why in flat, "%s: reason not emitted" % name
+
+
+def test_a_section_on_both_lists_is_refused(tmp_path, monkeypatch):
+    """Union equality alone accepts a double-listed section.
+
+    Mutation that flips it, measured: replace the partition check with
+    `if schema_sections != classified`. The totals then read 4 derived and
+    8 hand-written for an 11-section schema, and `work` is printed as
+    homework in the same file that claims to have derived it.
+    """
+    sys.path.insert(0, str(ROOT / "src"))
+    import factory_check
+
+    root, probes = _install(tmp_path, {"bin/poster": KEYED})
+    contract, evidence = infer.derive(root, infer.load_probes(probes))
+    factory_check._emit_derived_yaml(contract, evidence)      # green rail
+
+    monkeypatch.setattr(factory_check, "_DERIVED_SECTIONS",
+                        factory_check._DERIVED_SECTIONS + ("work",))
+    # Re-derived: the emitter consumes bookkeeping keys off the contract it is
+    # handed, so a second call on the same object raises KeyError before ever
+    # reaching the guard -- a red that would pass for the guard firing.
+    contract, evidence = infer.derive(root, infer.load_probes(probes))
+    with pytest.raises(AssertionError) as caught:
+        factory_check._emit_derived_yaml(contract, evidence)
+    assert "both derived and hand-written: ['work']" in str(caught.value)
+
+
+def test_the_same_section_twice_in_one_list_is_refused(tmp_path, monkeypatch):
+    """A duplicate prints the section twice and inflates the count.
+
+    Mutation that flips it, measured: delete the per-list duplicate loop.
+    Union equality still passes -- a set does not count -- and the emitted
+    header says 4 of 11 while listing three names.
+    """
+    sys.path.insert(0, str(ROOT / "src"))
+    import factory_check
+
+    root, probes = _install(tmp_path, {"bin/poster": KEYED})
+    contract, evidence = infer.derive(root, infer.load_probes(probes))
+
+    monkeypatch.setattr(factory_check, "_DERIVED_SECTIONS",
+                        factory_check._DERIVED_SECTIONS + ("effects",))
+    with pytest.raises(AssertionError) as caught:
+        factory_check._emit_derived_yaml(contract, evidence)
+    assert "_DERIVED_SECTIONS lists a section twice: ['effects']" \
+        in str(caught.value)

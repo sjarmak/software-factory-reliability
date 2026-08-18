@@ -1362,3 +1362,50 @@ def test_the_two_schemas_declare_the_same_effect_fields():
         left = {k: v for k, v in standalone[field].items() if k != "description"}
         right = {k: v for k, v in embedded[field].items() if k != "description"}
         assert left == right, (field, left, right)
+
+
+def test_omitting_campaigns_scores_better_than_declaring_it(tmp_path):
+    """The starter file and QUICKSTART both state this; here it is measured.
+
+    `_check_campaigns` returns before emitting anything when the section is
+    absent, so a contract that deletes campaigns gets a SHORTER findings list
+    than one that declares a real completion rule. That is stated in the
+    starter contract's header and in QUICKSTART, and a sentence about scoring
+    behaviour that nothing runs is exactly the kind of claim this kit exists
+    to catch.
+
+    This test does not assert the behaviour is right -- it is not. It pins the
+    documented numbers so that fixing the rule turns the DOCS red rather than
+    leaving them quietly false, which is how the previous version of that
+    paragraph ("an omitted section and a section that says unknown produce the
+    same findings") survived.
+
+    Mutation that flips it, measured: delete the `if campaigns is None:
+    return` guard in src/rules.py so an absent section is checked like a
+    declared one. Counts equalise and this goes red, pointing at the two
+    files whose prose then needs rewriting.
+    """
+    out = run_cli("init", "--out", str(tmp_path))
+    assert out.returncode == 0, out.stderr
+    omitted = tmp_path / "factory.yaml"
+    assert "campaigns:" not in omitted.read_text()
+
+    declared = tmp_path / "with-campaigns.yaml"
+    declared.write_text(
+        omitted.read_text()
+        + "\ncampaigns:\n  completion:\n"
+          "    all_current_targets_have_disposition: [published]\n")
+
+    def counts(path):
+        res = run_cli("review", str(path), "--out", str(tmp_path / "out"))
+        line = [ln for ln in res.stdout.splitlines()
+                if re.match(r"^\d+ FAIL, \d+ WARN$", ln)]
+        assert len(line) == 1, res.stdout
+        fail, warn = re.match(r"^(\d+) FAIL, (\d+) WARN$", line[0]).groups()
+        return int(fail), int(warn)
+
+    assert counts(omitted) == (5, 8)
+    assert counts(declared) == (5, 9)
+    # The point, stated as a comparison so a change in the starter's other
+    # sections cannot make this pass for the wrong reason.
+    assert counts(omitted) < counts(declared)

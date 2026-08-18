@@ -209,6 +209,44 @@ moves the reading.
 the line above it, and `out/evidence.json` holds the call sites a script can
 read.
 
+The derived file also closes with the eight sections it did NOT produce, each
+with the question it answers and the reason this tool does not answer it.
+Three of the schema's eleven sections are produced -- `version`, `factory`,
+`effects` -- because an effect's call sites are in your tree. Carried is not
+the same as fully observed even for those three: `version` is a constant,
+`factory.name` falls back to the directory basename, the effect names and
+destinations come from the probe pack you wrote, and `retry_contract` and
+`unknown_state_policy` are fixed at `unknown`. What is read off your
+installation is the call sites, and whether each scripted one carries its
+marker.
+
+The other eight are left to you, for two different reasons the file states per
+section. Some are decisions -- which system is the authority for durable facts,
+when a campaign is complete -- and two installations with byte-identical files
+can have decided them differently, so a derivation that produced them would be
+guessing, which is the failure this kit exists to catch one layer up. Others
+hold fields a scanner could observe with probes this kit does not have; that is
+a limit on the tool, not a property of your factory, and the reason says which
+case a section is.
+
+Write them in a contract file of your own, not into `factory.derived.yaml`.
+That file is regenerated from the scan, so an edit to it is gone on the next
+run, and `reconcile` only ever holds the `effects` section against your
+installation. Every section you hand-write is a claim; nothing in this kit
+contradicts it.
+
+Leaving a section out is not the same as declaring it `unknown`, and the
+difference does not run the way you would want. Several rule groups return
+early when their section is absent -- `campaigns` is the clearest: omit it and
+you get no campaign finding at all, declare it undecided and you get several.
+A missing section can score better than an honest one, so a short findings list
+is not a clean bill of health.
+
+That split is checked, not asserted. `_emit_derived_yaml` reads the schema and
+raises if a section is in neither list, so a schema that gains a section stops
+the run instead of writing a contract whose closing block silently
+under-reports what it left to you.
+
 Once you have a hand-written contract as well, hold the two against each other:
 
 ```

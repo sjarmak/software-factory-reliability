@@ -17,6 +17,7 @@ import argparse
 import json
 import re
 import sys
+import textwrap
 from pathlib import Path
 
 import yaml
@@ -33,9 +34,16 @@ SCHEMA_DIR = SCRIPT_DIR.parent / "schemas"
 
 STARTER_CONTRACT = """\
 # Starter factory reliability contract, written by factory-check init.
-# Replace each "unknown" with a decided value. The review command reads
-# "unknown" and absent sections as explicit findings, never as silent
-# passes, so this file is a worklist as much as a contract.
+# Replace each "unknown" with a decided value. review reads a declared
+# "unknown" as an explicit finding, never as a silent pass, so this file is a
+# worklist as much as a contract.
+#
+# An ABSENT section is not the same thing, and the difference does not run the
+# way you would want. Several rule groups return early when their section is
+# missing, so deleting a section can produce FEWER findings than declaring it
+# undecided: measured on this starter, omitting campaigns gives 5 FAIL / 8
+# WARN and declaring it gives 5 FAIL / 9 WARN. Do not read a short findings
+# list as a clean bill of health.
 
 version: factory.reliability/v1
 
@@ -72,8 +80,9 @@ effects:
     unknown_state_policy: unknown        # decide block_and_escalate, reconcile_then_block, or manual_review
 
 # Sections still to declare: authorities, reconciliation, scheduling,
-# code_estate, campaigns, observability. Each omission produces a
-# not-declared finding in review; omission means "not yet decided".
+# code_estate, campaigns, observability. Most omissions produce a not-declared
+# finding in review; campaigns and code_estate do not, per the note at the top
+# of this file. Omission means "not yet decided", and it is not scored as one.
 """
 
 
@@ -254,6 +263,75 @@ _DERIVED_EFFECT_FIELDS = [
 ]
 
 
+# The sections infer PRODUCES, and every other section in the schema with the
+# reason it is left for hand-writing. Both halves are here because the claim the
+# kit makes about itself -- "derived where it can be, hand-written only where it
+# cannot" -- is otherwise a sentence in a README that nothing checks.
+#
+# What separates the two lists is what THIS TOOL DOES, not a claim about what
+# is knowable. The scanner reads call sites, so the effects inventory is within
+# reach; nothing here reads a scheduler config, a store schema, or a CI
+# definition, so those sections are not produced.
+#
+# Two different reasons live in the second list and the entries say which.
+# Some sections record a DECISION -- which system is the authority for durable
+# facts -- and no amount of scanning recovers one; deriving it would mean
+# guessing, which is the failure this kit exists to catch one layer up. Others
+# hold fields a scanner genuinely could observe with probes this kit does not
+# have yet. Writing "cannot be derived" over that second group would be the same
+# overclaim the effect_identity field was carrying a week ago: a limit on the
+# instrument dressed as a property of the thing measured.
+#
+# `effects` is in the first list and is still not derived whole. retry_contract
+# and unknown_state_policy are fixed at unknown by construction, and the effect
+# names, destinations, and identity markers come from the probe pack a human
+# wrote. What is read off the installation is the CALL SITES and whether each
+# scripted one carries the declared marker.
+_DERIVED_SECTIONS = ("version", "factory", "effects")
+
+_HAND_WRITTEN_SECTIONS = [
+    ("work",
+     "the field names your work store uses for the logical item, one attempt,"
+     " and the executor session, plus how ownership is leased",
+     "A scan can list the columns a store has. It cannot tell you which of them"
+     " is the attempt identity -- that is what the column MEANS, and the store"
+     " does not record meanings."),
+    ("authorities",
+     "which system is the authority for facts, for procedure, for policy, and"
+     " for effects",
+     "A decision about your architecture. Nothing in the tree records it, and"
+     " two installations with identical files can have made it differently."),
+    ("artifacts",
+     "what identifies one artifact immutably, how verification runs are"
+     " identified, and what is rechecked at publication",
+     "The identity is a choice between a commit digest, a content hash, and a"
+     " mutable reference; the publication conditions are a policy."),
+    ("observability",
+     "which lifecycle transitions you watch end to end",
+     "An instrument's existence is visible. Whether it watches a transition"
+     " END TO END is a claim about what it would catch, which only a test that"
+     " breaks the transition can settle."),
+    ("scheduling",
+     "your execution pool's capacity, its scheduling classes, and how fairness"
+     " is applied",
+     "Capacity and fairness are policy. On some installations a scheduler"
+     " config states them; on others they live in an operator's head, and a"
+     " derivation that read the first case would report silence for the second"
+     " as though the policy did not exist."),
+    ("reconciliation",
+     "how divergence between intended and actual state is detected and closed",
+     "A procedure, not a call site."),
+    ("campaigns",
+     "when a campaign is complete",
+     "A rule you choose. The schema accepts several styles precisely because"
+     " installations disagree about it."),
+    ("code_estate",
+     "the repositories and trees this factory treats as its own",
+     "Optional, and a matter of intent rather than of what happens to be"
+     " checked out next to the contract."),
+]
+
+
 def _emit_derived_yaml(contract, evidence):
     """Render the derived contract with its provenance as YAML comments.
 
@@ -328,6 +406,95 @@ def _emit_derived_yaml(contract, evidence):
                 "_DERIVED_EFFECT_FIELDS and to both schemas."
                 % (sorted(expected - emitted) or "none",
                    sorted(emitted - expected) or "none"))
+
+    # The same coverage discipline one level up, on SECTIONS. A schema that
+    # gains a section this file has not classified stops the run here rather
+    # than emitting a contract whose closing block quietly under-reports what
+    # was left to the reader. Checked against the schema on disk, not against a
+    # list kept beside it, because two hand-maintained lists agreeing with each
+    # other is not evidence either agrees with the schema.
+    schema = json.loads((SCHEMA_DIR / "factory.schema.json").read_text())
+    # A root that describes its shape through $ref or allOf has no `properties`
+    # here, and .get(..., {}) would turn that into "the schema has no sections"
+    # -- a classification error reported against every section at once, when the
+    # real fault is that this guard cannot read this schema. Say which it is.
+    if not isinstance(schema.get("properties"), dict) or not schema["properties"]:
+        raise AssertionError(
+            "factory.schema.json has no top-level `properties` map, so the "
+            "derived/hand-written classification cannot be checked against it. "
+            "A root composed with $ref or allOf needs this guard taught to "
+            "resolve it, not a default of {}.")
+    schema_sections = set(schema["properties"])
+
+    # A PARTITION, not a union. Union equality alone accepts a section listed in
+    # BOTH lists: the totals then say 4 derived and 8 hand-written for an
+    # 11-section schema, and the section is printed as homework the file claims
+    # to have derived. Duplicates inside one list print the same entry twice.
+    derived = list(_DERIVED_SECTIONS)
+    handwritten = [n for n, _, _ in _HAND_WRITTEN_SECTIONS]
+    for label, names in (("_DERIVED_SECTIONS", derived),
+                         ("_HAND_WRITTEN_SECTIONS", handwritten)):
+        if len(names) != len(set(names)):
+            raise AssertionError(
+                "%s lists a section twice: %s"
+                % (label, sorted(n for n in set(names) if names.count(n) > 1)))
+    both = set(derived) & set(handwritten)
+    if both:
+        raise AssertionError(
+            "a section cannot be both derived and hand-written: %s"
+            % sorted(both))
+    classified = set(derived) | set(handwritten)
+    if schema_sections != classified:
+        raise AssertionError(
+            "every schema section must be classified as derived or "
+            "hand-written: unclassified %s, classified but not in the schema "
+            "%s. Add it to _DERIVED_SECTIONS or _HAND_WRITTEN_SECTIONS."
+            % (sorted(schema_sections - classified) or "none",
+               sorted(classified - schema_sections) or "none"))
+
+    lines.extend([
+        "",
+        "# ---------------------------------------------------------------",
+        "# WHAT IS NOT ABOVE, AND WHY.",
+        "#",
+        "# This file carries %d of the schema's %d sections: %s."
+        % (len(_DERIVED_SECTIONS), len(schema_sections),
+           ", ".join(_DERIVED_SECTIONS)),
+        "# Carried is not the same as fully observed, even for those three:",
+        "# version is a constant, factory.name can fall back to the directory",
+        "# basename, the effect names and destinations come from the probe pack",
+        "# a human wrote, and retry_contract and unknown_state_policy are fixed",
+        "# at unknown by construction. What was read off the installation is",
+        "# the CALL SITES, and whether each scripted one carries its marker.",
+        "#",
+        "# The %d below THIS TOOL DOES NOT DERIVE. Write them in a separate"
+        % len(_HAND_WRITTEN_SECTIONS),
+        "# contract file of your own, NOT in this one: this file is regenerated",
+        "# from a scan, so anything you add here is lost on the next run, and",
+        "# reconcile only ever checks the effects section against the",
+        "# installation. A section you hand-write is a CLAIM. Nothing in this",
+        "# kit contradicts it.",
+        "#",
+        "# Read the reason under each name before you decide it is missing",
+        "# work. Some are decisions no scan can recover -- two installations",
+        "# with byte-identical files decide them differently. Others hold",
+        "# fields a scanner COULD observe, and the reason says which; that is",
+        "# a limit on this tool, not a property of your factory.",
+        "#",
+        "# Omitting a section is NOT equivalent to declaring it unknown, and",
+        "# the difference does not always run the way you would want. Several",
+        "# rule groups return early when their section is absent -- campaigns",
+        "# is the clearest: leave it out and you get no campaign finding at",
+        "# all, declare it undecided and you get several. So a missing section",
+        "# can SCORE BETTER than an honest one. Do not read a short findings",
+        "# list off this file as a clean bill of health.",
+        "#",
+    ])
+    for name, answers, why in _HAND_WRITTEN_SECTIONS:
+        lines.extend("# " + ln for ln in textwrap.wrap(
+            "%s: %s." % (name, answers), 74, subsequent_indent="  "))
+        lines.extend("#     " + ln for ln in textwrap.wrap(why, 70))
+    lines.append("# ---------------------------------------------------------------")
     return "\n".join(lines) + "\n"
 
 
@@ -369,6 +536,15 @@ def cmd_infer(args):
             print("         review (%s): %s:%d  %s"
                   % (site.set_aside, site.path, site.line, site.text[:70]))
 
+    # Render the contract BEFORE writing anything. The emitter can refuse --
+    # an unclassified schema section, an unreadable schema, a field derive()
+    # produces that it does not cover -- and it used to refuse AFTER
+    # evidence.json had already been replaced, leaving a fresh evidence file
+    # beside a derived contract from an earlier run. Two files from two runs in
+    # one directory is worse than a run that wrote nothing: the timestamps agree
+    # and nothing in either file says they disagree.
+    contract_text = _emit_derived_yaml(contract, evidence)
+
     evidence_path = out_dir / "evidence.json"
     evidence_path.write_text(json.dumps(
         [
@@ -393,7 +569,7 @@ def cmd_infer(args):
     print("wrote %s" % evidence_path)
 
     target = Path(args.write) if args.write else out_dir / "factory.derived.yaml"
-    target.write_text(_emit_derived_yaml(contract, evidence))
+    target.write_text(contract_text)
     print("wrote %s" % target)
     return 0
 
