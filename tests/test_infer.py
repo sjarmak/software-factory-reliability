@@ -464,6 +464,41 @@ def test_an_undeclared_identity_is_reported_as_a_question_not_a_failed_search():
     assert "carry no unknown" not in reason
 
 
+def test_an_undeclared_identity_lists_no_site_as_missing_it():
+    """Nothing can lack a marker that was never named.
+
+    The reason string above was fixed for this case and the per-site list was
+    not, so a scaffolded pack printed one clean summary sentence and then a
+    fix list of `no unknown: <path>` for every call site found -- 155 of them
+    on the first installation this was tried against. The summary said there
+    was nothing to look for; the list underneath it disagreed, at length.
+
+    This is invisible on the installation the kit was written against, whose
+    probe pack declares real identities, and it is the FIRST output every new
+    user sees. Flips if missing_identity stops guarding on identity_name.
+    """
+    sites = [infer.CallSite(path="bin/x", line=n, text="git push",
+                            kind="scripted", has_identity=False)
+             for n in (1, 2, 3)]
+    evidence = infer.EffectEvidence(
+        name="git_push", destination="code_host",
+        identity_name="unknown", sites=sites)
+    assert evidence.missing_identity == []
+    assert len(evidence.sites) == 3, "the sites are still found and reported"
+
+
+def test_a_declared_identity_still_lists_the_sites_that_lack_it():
+    """The guard above must not empty the fix list for a real identity."""
+    carries = infer.CallSite(path="bin/a", line=1, text="git push --ref x",
+                             kind="scripted", has_identity=True)
+    lacks = infer.CallSite(path="bin/b", line=2, text="git push",
+                           kind="scripted", has_identity=False)
+    evidence = infer.EffectEvidence(
+        name="git_push", destination="code_host",
+        identity_name="expected_remote_ref", sites=[carries, lacks])
+    assert [s.path for s in evidence.missing_identity] == ["bin/b"]
+
+
 def test_a_file_in_two_groups_is_counted_once(tmp_path):
     """Overlapping path_globs must not double-count an invocation.
 

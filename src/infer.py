@@ -134,6 +134,18 @@ class EffectEvidence:
 
     @property
     def missing_identity(self):
+        """Sites that should carry the declared marker and do not.
+
+        Empty when the pack declares no identity, because nothing can lack a
+        marker that was never named. derived_identity() already returns "there
+        is nothing to look for" for that case; this guard is the same fact one
+        layer down, and it was missing -- a scaffolded pack printed that clean
+        sentence and then a `no unknown: <path>` line for every call site it
+        had just found. The sites are still reported as sites; only the claim
+        that they are FAILING is withdrawn.
+        """
+        if self.identity_name in (None, "", "unknown"):
+            return []
         return [
             s
             for s in self.scripted + self.fenced
