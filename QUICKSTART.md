@@ -152,9 +152,20 @@ and writes a probe pack naming the ones it found and the files it found them
 in. Read the two lists it prints. The first is the effects; the second is call
 sites per top-level directory, and it is there because a scan cannot tell a
 directory your factory WRITES from one it RUNS. In a generated report or a log,
-`git push` is a description of a call site rather than one. Re-run with
-`--exclude <dir>` for each directory that is output, until the numbers describe
-your code.
+`git push` is a description of a call site rather than one.
+
+Paths your own VCS already calls output are skipped, which is most of that
+problem solved from a declaration you already maintain rather than a list you
+have to write. On the installation this kit was written against, that took the
+scaffolded pack from 738 lines to 512, and what it dropped was agent working
+sets, pipeline scratch and a graph dump -- files in which these commands were
+recorded, not run. `--scan-ignored-paths` turns it off. If the check cannot run
+at all -- no git, or not a repository -- the run says so in a `SCAN` line
+rather than reporting that nothing is ignored, because those two are not the
+same answer.
+
+For directories your VCS tracks but your factory only writes, re-run with
+`--exclude <dir>` until the numbers describe your code.
 
 Then derive:
 
@@ -170,6 +181,19 @@ value and the flags that carry it, and re-run. The derivation confirms an
 identity only when every scripted call site carries it and no site is an
 instruction to an agent, since an instruction has no argument list until run
 time and no static marker can bind it.
+
+Under each effect are up to two lists, and they ask for different work. The
+first names call sites missing the marker: those are edits. The second is
+headed `review`, and holds matches the scan cannot read as invocations at all
+-- a command named inside a quoted string, a wrapper assigning its own name.
+They are set aside from the first list because sending you to add a flag to a
+`sed` replacement string wastes the list's credibility, and they are not
+dropped because the tool genuinely cannot tell them from a deferred command
+built for later, which is the unfenced write it exists to find. So an effect
+with entries in the review list stays `unknown` no matter how clean the first
+list is. Read them, and add `not_regex` to that effect's matcher in
+`probes.yaml` for the ones that are not invocations. That is the edit that
+moves the reading.
 
 `out/factory.derived.yaml` is the result, with the reason for every value on
 the line above it, and `out/evidence.json` holds the call sites a script can
@@ -187,9 +211,11 @@ supports more than the contract claims, and UNDECLARED for an effect your
 factory performs and your contract never mentions. Exit is nonzero on drift.
 
 Run against the installation this kit was written against, the answer on
-2026-08-18 was 3 drift, 2 open, 0 confirmed. Nothing confirmed, which is the
-correct reading of a factory that performs four of these effects with no
-written behaviour for a half-success.
+2026-08-18 was 3 drift, 1 unverified, 1 confirmed, 0 open. It read 3 drift, 2
+open, 0 confirmed earlier the same day, and the change was in this tool rather
+than in that factory: `confirmed` was not merely empty but unreachable for any
+factory with an agent-instruction call site, which is every factory this kit
+is addressed to.
 
 That number is not pinned by the test suite, because it is a property of an
 installation this repository does not contain. It is dated for the same reason
