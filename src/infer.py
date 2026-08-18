@@ -65,9 +65,9 @@ class CallSite:
     kind: str = "scripted"
     has_identity: bool = False
     identity_evidence: str = ""
-    # The match sat inside a quoted string. Not a verdict -- see
-    # EffectEvidence.quoted_unclassified for what is and is not concluded.
-    quoted: bool = False
+    # Why this match was set aside from the fix list, or "" if it was not.
+    # Not a verdict that it is harmless -- see EffectEvidence.unclassified.
+    set_aside: str = ""
 
 
 @dataclass
@@ -103,14 +103,15 @@ class EffectEvidence:
         return [s for s in self.sites if s.kind == "fenced"]
 
     @property
-    def quoted_unclassified(self):
-        """Matches inside a quoted string that carry no identity marker.
+    def unclassified(self):
+        """Matches that carry no identity marker and are not readable as calls.
 
         These are set aside from the fix list and from nothing else. The two
         shapes are not distinguishable mechanically, and both are common:
 
           PUSH_CMD="git push origin main"      a real command, built to run later
           fail "nested git push commands ..."  prose that names the command
+          ME=git-push-fenced                   a wrapper naming itself
 
         What separates them here is only that the second cannot be fixed --
         there is no invocation to add a flag to. Reporting them alongside the
@@ -128,7 +129,7 @@ class EffectEvidence:
         return [
             s
             for s in self.scripted + self.fenced
-            if s.quoted and not s.has_identity
+            if s.set_aside and not s.has_identity
         ]
 
     @property
@@ -136,7 +137,7 @@ class EffectEvidence:
         return [
             s
             for s in self.scripted + self.fenced
-            if not s.has_identity and not s.quoted
+            if not s.has_identity and not s.set_aside
         ]
 
     def derived_identity(self):
@@ -201,10 +202,10 @@ class EffectEvidence:
                 % (len(self.missing_identity), len(bindable), self.identity_name,
                    self._through_a_fence(), self._quoted_note()),
             )
-        if self.quoted_unclassified:
+        if self.unclassified:
             return (
                 "unknown",
-                "every unquoted scripted call site carries it%s%s"
+                "every readable scripted call site carries it%s%s"
                 % (self._through_a_fence(), self._quoted_note()),
             )
         return (
@@ -261,10 +262,10 @@ class EffectEvidence:
                    self._through_a_fence(), self._quoted_note()),
                 residual,
             )
-        if self.quoted_unclassified:
+        if self.unclassified:
             return (
                 "unknown",
-                "every unquoted code call site carries it%s%s"
+                "every readable code call site carries it%s%s"
                 % (self._through_a_fence(), self._quoted_note()),
                 residual,
             )
@@ -284,12 +285,12 @@ class EffectEvidence:
         using it moves the score -- which is the property that makes the fix
         worth doing rather than invisible.
         """
-        if not self.quoted_unclassified:
+        if not self.unclassified:
             return ""
         return (
-            "; %d quoted match(es) set aside for review -- exclude the ones "
+            "; %d match(es) set aside for review -- exclude the ones "
             "that are not invocations with not_regex in the probe pack"
-            % len(self.quoted_unclassified)
+            % len(self.unclassified)
         )
 
     def _through_a_fence(self):
@@ -872,25 +873,35 @@ def _apply_fences(evidence, fences):
         # fence nobody can point at is a claim, and claims are what the
         # derivation exists to replace -- so it credits nothing.
         #
-        # ANY rather than ALL, and the choice is load-bearing. The right rule is
-        # "every real call in the wrapper pins the lease", and that is what ALL
-        # says -- but the detector cannot yet tell a call from a MENTION, and a
-        # wrapper mentions its own name constantly (`ME=git-push-fenced`, a name
-        # inside a sed program). Measured here: ALL made `carried` false for
-        # both fences on this city, so all twelve sites that adopted them read
-        # "does not carry it" and the instrument inverted a second time on the
-        # very fix it was written to see. The two rules agree once mention
-        # detection lands, because the wrapper then has exactly one detected
-        # site; until then ANY is the one that is wrong in the safe direction.
-        # The residual is not hidden: the evidence line below carries the split,
-        # so a wrapper with one leased push and one bare push reads "1 of 2".
-        carrying = [s for s in implementation_sites if s.has_identity]
-        carried = bool(carrying)
+        # EVERY readable call in the wrapper must pin it. That is the rule a
+        # fence's whole argument rests on: N call sites collapse to ONE place
+        # worth checking, which is only true if the one place has no unfenced
+        # path through it. A wrapper with one leased push and one bare push
+        # credits nothing, and the evidence line says which.
+        #
+        # This was ANY for one commit, and the reason is worth keeping. Before
+        # mentions were detected, a wrapper's own name literal (ME=git-push-
+        # fenced) and a name inside a sed program counted as unkeyed calls, so
+        # ALL made `carried` false for both fences on the city this was written
+        # against -- every site that adopted a fence read "does not carry it",
+        # and the instrument inverted on the very fix it exists to see. The
+        # rules agree now that the wrapper resolves to exactly one readable
+        # call, which is what the ANY comment predicted would happen.
+        readable = [s for s in implementation_sites if not s.set_aside]
+        carrying = [s for s in readable if s.has_identity]
+        carried = bool(readable) and len(carrying) == len(readable)
         implementation_paths = {s.path for s in implementation_sites}
         for site in evidence.sites:
             if site.path in implementation_paths:
                 continue
             if site.kind == "harness":
+                continue
+            # A bare assignment names the fence and passes it nothing, so there
+            # is no invocation here to credit. A quoted deferred command is a
+            # different case and keeps its credit: PUSH_CMD="git-push-fenced
+            # --remote origin --branch $B" is the fence being used, arguments
+            # and all, on a line that happens to run later.
+            if site.set_aside == ASSIGNED_LITERAL:
                 continue
             if not re.search(command, site.text):
                 continue
@@ -898,8 +909,9 @@ def _apply_fences(evidence, fences):
             site.has_identity = carried
             label = fence.get("name", command)
             site.identity_evidence = (
-                "carried by %s (%d of %d site(s) in its implementation pin it)"
-                % (label, len(carrying), len(implementation_sites))
+                "carried by %s (%d of %d readable site(s) in its "
+                "implementation pin it)"
+                % (label, len(carrying), len(readable))
                 if carried
                 else "%s does not carry it" % label
             )
@@ -945,18 +957,29 @@ def _resolve_overlaps(sites):
     return [best[key] for key in sorted(best)]
 
 
-def match_is_quoted(segment, matchers, language):
-    """Whether the first matching pattern lands inside a quoted string.
+# A whole segment that is one bare shell assignment: NAME=value, nothing else
+# on the line. A wrapper naming itself (`ME=git-push-fenced`) has this shape,
+# and so does a deferred command with no arguments -- which is why matching it
+# sets the site aside for review rather than dropping it.
+_BARE_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=[^\s]*$")
+ASSIGNED_LITERAL = "assigned as a bare literal; nothing is invoked on this line"
+INSIDE_A_STRING = "inside a quoted string"
+
+
+def set_aside_reason(segment, matchers, language):
+    """Why this match cannot be read as an invocation, or "" if it can be.
 
     Shell-style quoting only, and deliberately so: the languages in scope here
     (shell, TOML formula bodies, prompt markdown holding shell) all quote the
     same two ways, and Python's triple-quoted and f-string forms would need a
-    real parser to get right. An unsupported language returns False, which
-    leaves the site in the fix list -- the conservative direction, since a site
-    wrongly kept is reviewed and a site wrongly set aside is not.
+    real parser to get right. An unsupported language sets nothing aside, which
+    is the conservative direction: a site wrongly kept is reviewed, a site
+    wrongly set aside is not.
     """
     if language not in ("shell", "unknown", "toml", "markdown"):
-        return False
+        return ""
+    if _BARE_ASSIGNMENT.match(segment.strip()):
+        return ASSIGNED_LITERAL
     pos = None
     for matcher in matchers:
         langs = matcher.get("languages")
@@ -967,7 +990,7 @@ def match_is_quoted(segment, matchers, language):
             pos = found.start()
             break
     if pos is None:
-        return False
+        return ""
     quote, i = None, 0
     while i < pos and i < len(segment):
         char = segment[i]
@@ -981,7 +1004,7 @@ def match_is_quoted(segment, matchers, language):
         elif quote == '"' and char == "\\":
             i += 1
         i += 1
-    return quote is not None
+    return INSIDE_A_STRING if quote is not None else ""
 
 
 def _collect(evidence, files, kind, matchers, path_globs, markers):
@@ -1017,7 +1040,7 @@ def _collect(evidence, files, kind, matchers, path_globs, markers):
                     kind=kind,
                     has_identity=bool(found),
                     identity_evidence=evidence_text,
-                    quoted=match_is_quoted(segment, matchers, language),
+                    set_aside=set_aside_reason(segment, matchers, language),
                 )
             )
 

@@ -299,9 +299,9 @@ def cmd_infer(args):
         # Printed under their own heading, with the matched text, because the
         # reader's job on these is to decide whether each one is an invocation
         # at all -- which the location alone cannot tell them.
-        for site in item.quoted_unclassified:
-            print("         quoted, review: %s:%d  %s"
-                  % (site.path, site.line, site.text[:80]))
+        for site in item.unclassified:
+            print("         review (%s): %s:%d  %s"
+                  % (site.set_aside, site.path, site.line, site.text[:70]))
 
     evidence_path = out_dir / "evidence.json"
     evidence_path.write_text(json.dumps(

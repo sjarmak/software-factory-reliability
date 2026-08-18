@@ -895,14 +895,17 @@ def test_a_fence_declaration_widens_detection_it_does_not_only_reclassify(tmp_pa
     ]
 
 
-def test_the_credit_line_names_how_much_of_the_implementation_pins(tmp_path):
-    """Credit survives one non-pinning line in the wrapper, and says so.
+def test_one_unpinned_push_in_the_wrapper_withdraws_credit_from_every_caller(tmp_path):
+    """A fence's argument is that N call sites collapse to ONE place worth
+    checking. That is only true if the one place has no unfenced path through
+    it, so a fallback push with no lease costs the whole fence its credit.
 
-    ANY rather than ALL, because the detector cannot yet tell a call from a
-    mention and a wrapper mentions its own name (`ME=git-push-fenced`). ALL
-    inverted the instrument on the real installation: both fences read "does
-    not carry it" and every adopting site lost the identity. The residual is
-    kept visible in the evidence instead of being collapsed away.
+    This read the other way for one commit -- credit survived a non-pinning
+    line -- and the reason is worth keeping. Before mentions were detected, a
+    wrapper's own `ME=git-push-fenced` counted as an unpinned call, so the
+    strict rule made both real fences read "does not carry it" and every
+    adopting site lost the identity. The instrument inverted on the fix it was
+    written to see, and loosening the rule was the wrong place to fix it.
     """
     wrapper = FENCE_OK + 'git push "$REMOTE" "$FALLBACK"\n'
     item = _fence_identity(tmp_path, {
@@ -910,8 +913,25 @@ def test_the_credit_line_names_how_much_of_the_implementation_pins(tmp_path):
         "bin/ship": CALLS_FENCE,
     })
     caller = [s for s in item.fenced if s.path == "bin/ship"]
+    assert caller and not caller[0].has_identity
+    assert "does not carry it" in caller[0].identity_evidence
+
+
+def test_a_wrapper_that_only_mentions_itself_still_credits_its_callers(tmp_path):
+    """The other half, and the one that made the strict rule usable.
+
+    Every real fence assigns its own name. If that line counts as an unpinned
+    call the strict rule can never be satisfied by any wrapper anyone would
+    actually write -- a guard that can never go green.
+    """
+    wrapper = "#!/usr/bin/env bash\nME=git-push-fenced\n" + FENCE_OK
+    item = _fence_identity(tmp_path, {
+        "bin/git-push-fenced": wrapper,
+        "bin/ship": CALLS_FENCE,
+    })
+    caller = [s for s in item.fenced if s.path == "bin/ship"]
     assert caller and caller[0].has_identity
-    assert "1 of 2 site(s) in its implementation pin it" in caller[0].identity_evidence
+    assert "1 of 1 readable site(s)" in caller[0].identity_evidence
 
 
 def _git_install(tmp_path, files, gitignore):
@@ -998,8 +1018,8 @@ def test_a_quoted_mention_is_set_aside_from_the_fix_list(tmp_path):
     _, evidence = infer.derive(root, infer.load_probes(probes))
     item = evidence[0]
     assert [s.path for s in item.missing_identity] == ["bin/real"]
-    assert [s.path for s in item.quoted_unclassified] == ["bin/talks-about-it"]
-    assert "1 quoted match(es) set aside" in reason
+    assert [s.path for s in item.unclassified] == ["bin/talks-about-it"]
+    assert "1 match(es) set aside" in reason
 
 
 def test_setting_a_quoted_match_aside_never_decides_the_identity(tmp_path):
@@ -1022,7 +1042,7 @@ def test_setting_a_quoted_match_aside_never_decides_the_identity(tmp_path):
     })
     # Every unquoted site carries the marker, and the answer is still not yes.
     assert value == "unknown"
-    assert "every unquoted scripted call site carries it" in reason
+    assert "every readable scripted call site carries it" in reason
     assert "not_regex" in reason
 
 
@@ -1057,7 +1077,7 @@ def test_an_unquoted_command_is_not_set_aside(tmp_path):
     _, evidence = infer.derive(root, infer.load_probes(probes))
     item = evidence[0]
     assert [s.path for s in item.missing_identity] == ["bin/real"]
-    assert item.quoted_unclassified == []
+    assert item.unclassified == []
 
 
 def test_a_separator_inside_quotes_does_not_end_the_command():
@@ -1103,4 +1123,34 @@ def test_a_quoted_command_split_at_its_own_separator_is_still_seen_as_quoted(tmp
     _, evidence = infer.derive(root, infer.load_probes(probes))
     item = evidence[0]
     assert [s.path for s in item.missing_identity] == []
-    assert [s.path for s in item.quoted_unclassified] == ["bin/checks"]
+    assert [s.path for s in item.unclassified] == ["bin/checks"]
+
+
+def test_a_bare_assignment_is_set_aside_not_reported_as_a_call(tmp_path):
+    """`ME=git-push-fenced` is a string constant, and every wrapper has one.
+
+    This was created by the fence-detection widening: the fence's own command
+    pattern matches the wrapper's name literal, so adopting a fence added a
+    permanent unfixable entry to the fix list of every installation that
+    adopted one.
+    """
+    item = _fence_identity(tmp_path, {
+        "bin/git-push-fenced": FENCE_OK,
+        "bin/names-it": "#!/usr/bin/env bash\nPUSHER=git-push-fenced\n",
+    })
+    assert [s.path for s in item.missing_identity] == []
+    assert [(s.path, s.set_aside) for s in item.unclassified] == [
+        ("bin/names-it",
+         "assigned as a bare literal; nothing is invoked on this line")]
+
+
+def test_an_env_prefixed_command_is_not_a_bare_assignment(tmp_path):
+    """The rail. `FOO=bar cmd ...` is an invocation with an assignment in front
+    of it, and reading it as a constant would hide a real call site."""
+    item = _fence_identity(tmp_path, {
+        "bin/git-push-fenced": FENCE_OK,
+        "bin/prefixed": "#!/usr/bin/env bash\nGIT_QUIET=1 git-push-fenced --remote origin\n",
+    })
+    assert [s.path for s in item.unclassified] == []
+    caller = [s for s in item.fenced if s.path == "bin/prefixed"]
+    assert caller and caller[0].has_identity
