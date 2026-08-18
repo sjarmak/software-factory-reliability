@@ -26,9 +26,13 @@ nothing. A SCRIPTED site is a line of code: a static check can bind it, and a
 missing identity there is a fixable defect. An INSTRUCTED site is a sentence in
 a prompt or a formula telling an agent to perform the effect: no static marker
 can bind it, because there is no argument list until an agent writes one at run
-time. An effect with any instructed site cannot have a derived identity at all,
-and saying so is more useful than reporting the scripted fraction as if it were
-coverage. A HARNESS site is a test or a checker exercising the verb; it is
+time. An effect with any instructed site gets no derived effect_identity: the
+guarantee is a claim about every route, and this tool cannot establish what an
+agent will type. It is NOT a claim that the agent omits the identity -- an
+instruction can name the flag, and often does -- only that nothing here can
+show that it does. What the scripted sites scored is reported alongside, as
+code_lane_identity and instructed_call_sites, because the two questions have
+different remedies. A HARNESS site is a test or a checker exercising the verb; it is
 subtracted from the derivation and still printed, because a harness that
 performs a real effect is a harness that can perform it against the wrong
 destination, and silently dropping it would hide that.
@@ -1074,19 +1078,24 @@ def derive(root, probes, notes=None):
 
     effects = []
     for item in evidence:
-        # The CODE-lane answer, not the strict one. derived_identity() withdraws
-        # the identity the moment a single call site is a sentence in a prompt
-        # template, and every agent-driven factory has those -- so the strict
-        # answer is "unknown" for every effect on any real installation, and the
-        # derived contract comes out a uniform wall of undecided fields. That is
-        # the same collapse the retry_contract and unknown_state_policy
-        # vocabularies had: an effect whose code is unanimous and an effect whose
-        # code does not carry the identity at all produce an identical record.
+        # effect_identity is the STRICT answer, and it stays strict. The field
+        # means "this value is carried unchanged across retries" -- a guarantee
+        # about every route that performs the effect, not a coverage figure for
+        # the ones we can read. code_lane_identity() answers a narrower and very
+        # useful question, and an earlier version of this loop wrote ITS answer
+        # here. That traded an under-claim for an over-claim: an effect with one
+        # scripted site carrying the key and one prompt telling an agent to run
+        # the command came out with a decided identity, and every downstream
+        # consumer -- the renderer's Effect identity column, the schema, a
+        # machine reading the contract -- was told the retry was safe.
         #
-        # reconcile had this fixed already and infer never got it, which is why
-        # one run of this tool could print CONFIRMED for slack_publish and write
-        # `effect_identity: unknown` for the same effect in the same breath.
-        value, reason, residual = item.code_lane_identity()
+        # The two lanes are reported side by side instead. The disagreement that
+        # motivated the earlier change was real (reconcile printed CONFIRMED
+        # while infer wrote `unknown` for the same effect), and the fix for it
+        # is to SHOW both answers, not to promote the weaker one into the field
+        # that carries the guarantee.
+        value, reason = item.derived_identity()
+        code_value, code_reason, residual = item.code_lane_identity()
         effect = {
             "name": item.name,
             "destination": item.destination,
@@ -1097,12 +1106,19 @@ def derive(root, probes, notes=None):
             "retry_contract": "unknown",
             "unknown_state_policy": "unknown",
             "_reason": reason,
+            "_code_lane_reason": code_reason,
         }
-        # The residual is written whenever it was measured, including zero. An
+        # Two OBSERVATIONS, never guarantees, and the schema descriptions say
+        # so. Together they say what the strict "unknown" above is hiding:
+        # whether the code that performs this effect carries the identity, and
+        # how many routes are prose that no marker can bind.
+        #
+        # Both are written whenever they were measured, including zero. An
         # absent field means nobody looked; a zero means somebody looked and
         # found none, and a reviewer has to be able to tell those apart. Writing
-        # it ONLY when nonzero would reintroduce, one field over, exactly the
-        # ambiguity this change exists to remove.
+        # them ONLY when interesting would reintroduce, one field over, exactly
+        # the ambiguity this pair exists to remove.
+        effect["code_lane_identity"] = code_value
         effect["instructed_call_sites"] = residual
         effects.append(effect)
 

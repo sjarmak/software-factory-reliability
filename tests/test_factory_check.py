@@ -706,6 +706,86 @@ def test_reconcile_calls_an_agents_only_effect_unverified_not_drift(tmp_path):
     assert not [l for l in out.stdout.splitlines() if l.startswith("DRIFT  merge_pull_request")]
 
 
+def test_reconcile_contradicts_a_false_declared_instructed_count(tmp_path):
+    """The check that stops the new field from being a self-clearing one.
+
+    EFFECT-006 fails on a nonzero instructed_call_sites, and review reads the
+    CONTRACT. So an author who does not want that finding writes 0 -- and
+    review goes green with the installation untouched, which is the hand-edit-
+    the-declaration move this whole tool exists to catch, reintroduced by the
+    field added to catch it. Only the scan can contradict it.
+
+    Mutation: drop the _check_declared_observations call from cmd_reconcile, or
+    make it compare only when the declared count is larger.
+    """
+    contract, probes, root = _lanes_install(tmp_path)
+    contract.write_text(contract.read_text().replace(
+        "    effect_identity: idempotency_key",
+        "    effect_identity: idempotency_key\n    instructed_call_sites: 0", 1))
+    out = run_cli("reconcile", str(contract), str(root), "--probes", str(probes))
+    line = [l for l in out.stdout.splitlines() if l.startswith("STALE  slack_publish")]
+    assert line, out.stdout
+    assert "declares instructed_call_sites 0" in line[0]
+    assert "the scan finds 1" in line[0]
+    assert out.returncode == 1
+
+
+def test_reconcile_reports_an_unmeasured_count_without_failing_on_it(tmp_path):
+    """Absence is not contradiction, and it is not a silent pass.
+
+    An omitted instructed_call_sites means the author never measured, which is
+    honest. It also means EFFECT-006 can never fire on that contract, because
+    review reads the document -- so reconcile is the only place that knows the
+    real number and it has to say it. It does not set the exit code: failing an
+    omission would punish the contract that declines to guess over the one that
+    writes a comfortable zero, which the STALE check catches instead.
+
+    Mutation: report the omission as STALE, or drop the elif branch entirely.
+    """
+    contract, probes, root = _lanes_install(tmp_path)
+    out = run_cli("reconcile", str(contract), str(root), "--probes", str(probes))
+    line = [l for l in out.stdout.splitlines()
+            if l.startswith("UNRECORDED  slack_publish")]
+    assert line, out.stdout
+    assert "1 agent-instruction call site(s)" in line[0]
+    assert not [l for l in out.stdout.splitlines() if l.startswith("STALE")], out.stdout
+    # The half the name promises, and the half a mutation walked straight
+    # through until it was written down: reported, and NOT failed on.
+    assert out.returncode == 0, out.stdout
+
+
+def test_a_measured_zero_is_not_reported_as_unmeasured(tmp_path):
+    """The other rail on the branch above: it keys on the field being ABSENT,
+    not on the count being uninteresting. An effect with no instructed sites and
+    no declaration has nothing to report, and reporting it would put a line on
+    every fully-scripted effect in every contract.
+
+    Mutation: fire the UNRECORDED branch on `not declared_count` rather than on
+    `declared_count is None`.
+    """
+    contract, probes, root = _lanes_install(tmp_path)
+    # Remove the one instructed site, leaving the scripted call alone.
+    (root / "formulas" / "ship.toml").write_text('prompt = "ship it"\n')
+    out = run_cli("reconcile", str(contract), str(root), "--probes", str(probes))
+    assert not [l for l in out.stdout.splitlines()
+                if l.startswith(("STALE", "UNRECORDED"))], out.stdout
+
+
+def test_reconcile_contradicts_a_false_declared_code_lane(tmp_path):
+    """The second declared observation, checked the same way: an author can
+    write code_lane_identity by hand too, and the scan is the authority."""
+    contract, probes, root = _lanes_install(tmp_path)
+    contract.write_text(contract.read_text().replace(
+        "    effect_identity: idempotency_key",
+        "    effect_identity: idempotency_key\n"
+        "    code_lane_identity: request_uuid", 1))
+    out = run_cli("reconcile", str(contract), str(root), "--probes", str(probes))
+    line = [l for l in out.stdout.splitlines() if l.startswith("STALE  slack_publish")]
+    assert line, out.stdout
+    assert "declares code_lane_identity request_uuid" in line[0]
+    assert "the scan finds idempotency_key" in line[0]
+
+
 def test_reconcile_still_reports_drift_when_the_code_lane_misses_the_identity(tmp_path):
     """The confirmation rail must be able to go red: the same installation with
     the identity marker removed from the one code site."""
@@ -1148,18 +1228,22 @@ def test_the_unsound_section_is_absent_when_every_policy_is_sound(tmp_path):
     assert "UNSOUND" not in matrix
 
 
-def test_a_decided_identity_with_instructed_sites_warns(tmp_path):
-    """The finding that keeps the derived contract honest.
+def test_a_decided_identity_with_instructed_sites_fails(tmp_path):
+    """The finding that keeps a declared identity from over-reaching.
 
-    The derivation now writes the CODE-lane identity, so an effect whose code is
-    unanimous reads as decided even when some call sites are prose telling an
-    agent to run the command. That is the right value and it is not the whole
-    truth: a marker cannot bind a sentence, so the identity holds where code
-    performs the effect and nowhere else. Without this rule, switching the
-    derivation to the code lane would have traded an under-claim for an
-    over-claim -- a clean review on a factory whose agents can skip the flag.
+    An effect can declare an identity that its code really does carry at every
+    scripted site, and still be performed by routes that are sentences in a
+    prompt. The declaration is true of the code and the effect is still exposed:
+    a retry through an instructed route can duplicate.
 
-    Mutation: drop the EFFECT-006 block from _check_effects.
+    FAIL, not WARN. This was WARN for one release, on the argument that the
+    declaration is true and the remedy is a design change. Neither is a severity
+    argument -- the catalog defines FAIL as an open failure boundary, this is
+    one, and warnings do not fail a review without --strict, so the exposure
+    would have been reported by a green run.
+
+    Mutation: drop the EFFECT-006 block from _check_effects, or set its severity
+    back to WARN.
     """
     clean = ISSUE_TO_PR.read_text()
     doc = tmp_path / "instructed.yaml"
@@ -1168,16 +1252,18 @@ def test_a_decided_identity_with_instructed_sites_warns(tmp_path):
         "    instructed_call_sites: 7\n"
         "    retry_contract: deduplicate", 1))
     result = run_cli("review", str(doc), "--out", str(tmp_path))
-    ids = [line.split()[1] for line in result.stdout.splitlines()
-           if line.startswith(("FAIL ", "WARN "))]
-    assert "EFFECT-006" in ids, result.stdout
+    assert result.returncode != 0, result.stdout
+    fails = [line.split()[1] for line in result.stdout.splitlines()
+             if line.startswith("FAIL ")]
+    assert "EFFECT-006" in fails, result.stdout
     assert "7" in result.stdout, result.stdout
     findings = json.loads((tmp_path / "findings.json").read_text())
-    paths = [f["path"] for f in findings if f["rule"] == "EFFECT-006"]
-    assert paths and all(p.endswith(".instructed_call_sites") for p in paths), paths
+    entries = [f for f in findings if f["rule"] == "EFFECT-006"]
+    assert entries and all(f["severity"] == "FAIL" for f in entries), entries
+    assert all(f["path"].endswith(".instructed_call_sites") for f in entries)
 
 
-def test_zero_instructed_sites_does_not_warn(tmp_path):
+def test_zero_instructed_sites_is_not_a_finding(tmp_path):
     """The other rail, and the reason the field is written even when it is zero.
 
     A measured zero is the good case and has to read as the good case; if it
@@ -1196,13 +1282,17 @@ def test_zero_instructed_sites_does_not_warn(tmp_path):
     assert "EFFECT-006" not in result.stdout, result.stdout
 
 
-def test_an_undecided_identity_does_not_also_warn_about_instructions(tmp_path):
-    """An effect with no decided identity has a bigger problem than where the
-    identity is enforceable, and EFFECT-001 already says so. Firing both turns
-    one defect into two findings and makes the count of an audit depend on how
-    many rules happen to overlap.
+def test_an_undecided_identity_still_reports_its_instructed_routes(tmp_path):
+    """Two defects with different remedies, so two findings.
 
-    Mutation: drop the _declared(effect_identity) guard from EFFECT-006.
+    EFFECT-006 carried a _declared(effect_identity) guard for one release, on
+    the theory that an effect with no decided identity has a bigger problem and
+    EFFECT-001 already says so. It does say so, and it does not say WHY: an
+    author reading only EFFECT-001 goes and picks an identity, and four of the
+    routes still cannot be checked afterwards. Overlapping effect findings are
+    normal in this catalog; a silent second cause is not.
+
+    Mutation: restore the _declared(effect_identity) guard on EFFECT-006.
     """
     clean = ISSUE_TO_PR.read_text()
     doc = tmp_path / "undecided-instructed.yaml"
@@ -1213,10 +1303,12 @@ def test_an_undecided_identity_does_not_also_warn_about_instructions(tmp_path):
         "    effect_identity: notification_id",
         "    effect_identity: unknown", 1))
     result = run_cli("review", str(doc), "--out", str(tmp_path))
-    assert "EFFECT-006" not in result.stdout, result.stdout
+    assert "EFFECT-006" in result.stdout, result.stdout
+    assert "EFFECT-001" in result.stdout, result.stdout
 
 
-def _effect_properties(schema_path):
+def _schema_properties(schema_path):
+
     """The effect object's property set, found by shape rather than by path.
 
     The two schemas nest the effect object differently, and hard-coding either
@@ -1240,7 +1332,7 @@ def _effect_properties(schema_path):
 
     found = find(json.loads(Path(schema_path).read_text()))
     assert found is not None, "no effect object in %s" % schema_path
-    return set(found)
+    return found
 
 
 def test_the_two_schemas_declare_the_same_effect_fields():
@@ -1255,9 +1347,18 @@ def test_the_two_schemas_declare_the_same_effect_fields():
 
     Mutation: rename the property in either file.
     """
-    standalone = _effect_properties(ROOT / "schemas" / "effect.schema.json")
-    embedded = _effect_properties(ROOT / "schemas" / "factory.schema.json")
-    assert standalone == embedded, {
-        "only in effect.schema.json": sorted(standalone - embedded),
-        "only in factory.schema.json": sorted(embedded - standalone),
+    standalone = _schema_properties(ROOT / "schemas" / "effect.schema.json")
+    embedded = _schema_properties(ROOT / "schemas" / "factory.schema.json")
+    assert set(standalone) == set(embedded), {
+        "only in effect.schema.json": sorted(set(standalone) - set(embedded)),
+        "only in factory.schema.json": sorted(set(embedded) - set(standalone)),
     }
+    # The CONSTRAINTS too, not only the names. Equal name sets let one schema
+    # declare instructed_call_sites as `integer` and the other as `number`:
+    # both documents validate, the sets match, and a hand-written 0.5 then
+    # passes the factory schema and slips past EFFECT-006, whose rule requires
+    # an int. Descriptions are prose for a human and are allowed to differ.
+    for field in sorted(standalone):
+        left = {k: v for k, v in standalone[field].items() if k != "description"}
+        right = {k: v for k, v in embedded[field].items() if k != "description"}
+        assert left == right, (field, left, right)

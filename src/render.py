@@ -166,6 +166,34 @@ def effect_matrix(doc):
                 "work is silently dropped." if policy == "assume_success" else
                 "If the attempt did land, the retry sends a second one."))
 
+    # The identity column above is the GUARANTEE, and on an agent-driven factory
+    # it reads "unknown" for effects whose code is in fact unanimous. Rendering
+    # only that column tells the reader nothing is established anywhere; putting
+    # the code-lane reading in the column instead would tell them the retry is
+    # safe. Both are wrong, so both facts go here, under a heading that says
+    # which is which.
+    instructed = [e for e in effects
+                  if isinstance(e, dict)
+                  and isinstance(e.get("instructed_call_sites"), int)
+                  and e["instructed_call_sites"] > 0]
+    if instructed:
+        lines.extend(["", "## Effects an agent performs by instruction", ""])
+        lines.append("Nothing static can read the arguments of a call an agent "
+                     "writes at run time, so the identity column above is "
+                     "withdrawn for these effects. That is a limit on what this "
+                     "report can establish, not a finding that the agent omits "
+                     "the identity.")
+        lines.append("")
+        for effect in instructed:
+            lane = effect.get("code_lane_identity")
+            lines.append("- **%s** -> %s: %d instructed call site(s). %s" % (
+                effect.get("name", "not declared"),
+                effect.get("destination", "not declared"),
+                effect["instructed_call_sites"],
+                ("The code that performs it carries `%s`." % lane)
+                if lane and lane != "unknown"
+                else "The code that performs it carries no single identity either."))
+
     duplicating = [e for e in effects
                    if isinstance(e, dict) and e.get("retry_contract") == "at_least_once"]
     if duplicating:

@@ -234,6 +234,26 @@ def _print_scan_notes(notes):
         print("SCAN  %s" % note)
 
 
+# The body fields of a derived effect, in emission order, each with the comment
+# that explains why it reads as it does. Kept as data rather than a run of
+# append() calls so the emitter can prove it covered every field derive()
+# produced instead of quietly dropping the ones nobody remembered.
+_DERIVED_EFFECT_FIELDS = [
+    ("effect_identity", None),
+    ("retry_contract",
+     "not derivable from call sites: how the destination behaves on a repeat"),
+    ("unknown_state_policy",
+     "not derivable from call sites: a decision, not code"),
+    ("code_lane_identity",
+     "OBSERVATION, not a guarantee: what the code that performs this effect"
+     " carries. Differs from effect_identity exactly when the line below is"
+     " nonzero"),
+    ("instructed_call_sites",
+     "call sites that are prose telling an agent to run the command; nothing"
+     " static can read an argument list that does not exist until run time"),
+]
+
+
 def _emit_derived_yaml(contract, evidence):
     """Render the derived contract with its provenance as YAML comments.
 
@@ -272,6 +292,13 @@ def _emit_derived_yaml(contract, evidence):
     for effect in contract["effects"]:
         item = by_name.get(effect["name"])
         lines.append("  # %s" % effect.pop("_reason"))
+        code_reason = effect.pop("_code_lane_reason", None)
+        if code_reason:
+            # The second lane's reason, always printed, even when it agrees.
+            # Printing it only on disagreement would make its ABSENCE the signal
+            # that the lanes agree, and an absent line is also what a tool that
+            # never looked produces.
+            lines.append("  # code lane: %s" % code_reason)
         if item is not None and item.sites:
             shown = item.sites[:3]
             for site in shown:
@@ -281,16 +308,26 @@ def _emit_derived_yaml(contract, evidence):
                              % (len(item.sites) - len(shown)))
         lines.append("  - name: %s" % effect["name"])
         lines.append("    destination: %s" % effect["destination"])
-        lines.append("    effect_identity: %s" % effect["effect_identity"])
-        lines.append("    # not derivable from call sites: how the destination"
-                     " behaves on a repeat")
-        lines.append("    retry_contract: %s" % effect["retry_contract"])
-        lines.append("    # not derivable from call sites: a decision, not code")
-        lines.append("    unknown_state_policy: %s" % effect["unknown_state_policy"])
-        lines.append("    # call sites that are prose telling an agent to run the"
-                     " command; a marker cannot bind a sentence")
-        lines.append("    instructed_call_sites: %d"
-                     % effect["instructed_call_sites"])
+        emitted = {"name", "destination"}
+        for field, note in _DERIVED_EFFECT_FIELDS:
+            if note:
+                lines.append("    # %s" % note)
+            lines.append("    %s: %s" % (field, effect[field]))
+            emitted.add(field)
+        # A field added to derive() and not added to the list above used to be
+        # dropped in silence -- which is how instructed_call_sites came out None
+        # in the first generated contract that had it. A test can only catch
+        # that after someone writes the test; this catches it at the moment the
+        # field is added, in the run that would have emitted the broken file.
+        # Underscore keys are provenance for the comments and never body fields.
+        expected = {k for k in effect if not k.startswith("_")}
+        if expected != emitted:
+            raise AssertionError(
+                "the derived-contract emitter does not cover every field "
+                "derive() produces: missing %s, unexpected %s. Add it to "
+                "_DERIVED_EFFECT_FIELDS and to both schemas."
+                % (sorted(expected - emitted) or "none",
+                   sorted(emitted - expected) or "none"))
     return "\n".join(lines) + "\n"
 
 
@@ -305,17 +342,24 @@ def cmd_infer(args):
     print("scanned %d files, found %d call site(s) across %d effect(s)"
           % (contract.pop("_scanned_files"), total, len(evidence)))
     for item in evidence:
-        # The same code-lane answer the derived contract records, so the run's
+        # BOTH lanes, in the order the contract records them, so the run's
         # stdout and its output file cannot disagree about the installation.
-        value, reason, residual = item.code_lane_identity()
-        mark = "ok  " if value != "unknown" else "MISS"
-        print("  %s %-22s %2d site(s), identity %s (%s)"
-              % (mark, item.name, len(item.sites), value, reason))
-        # Printed on its own line rather than folded into the reason, because it
-        # is the one fact that survives fixing every scripted site.
+        # Printing only the code lane is what an earlier version did, and it let
+        # a reader watch `ok slack_publish ... identity idempotency_key` scroll
+        # past while the file being written said `effect_identity: unknown`.
+        strict, reason = item.derived_identity()
+        code_value, code_reason, residual = item.code_lane_identity()
+        mark = "ok  " if strict != "unknown" else "MISS"
+        print("  %s %-22s %2d site(s), effect_identity %s (%s)"
+              % (mark, item.name, len(item.sites), strict, reason))
+        # The narrower observation, on its own line and labelled, printed only
+        # when it says something the line above did not. It is the fact that
+        # survives fixing every scripted site, and it is not a guarantee.
+        if code_value != strict:
+            print("         code lane: %s (%s)" % (code_value, code_reason))
         if residual:
-            print("         %d further site(s) are agent instructions; no marker "
-                  "can bind them" % residual)
+            print("         %d call site(s) are agent instructions; nothing "
+                  "static can read their arguments" % residual)
         for site in item.missing_identity:
             print("         no %s: %s:%d" % (item.identity_name, site.path, site.line))
         # Printed under their own heading, with the matched text, because the
@@ -481,6 +525,51 @@ def _with_residual(reason, residual):
             "marker can bind them" % (reason, residual))
 
 
+def _check_declared_observations(effect, item, name, out):
+    """Contradict a declared observation with the fresh scan, or say nothing.
+
+    code_lane_identity and instructed_call_sites are the two fields a derived
+    contract writes that a hand author can also write. Every other field in the
+    contract is a claim about the world that only a human can settle; these two
+    are readings of the code on disk, so a declared value that disagrees with
+    the scan is simply wrong, and the scan is the authority.
+
+    This exists because the review rules cannot tell the difference. EFFECT-006
+    fails on a nonzero instructed_call_sites, so an author who does not want
+    that finding can write 0, or delete the line, and review goes green with the
+    installation untouched -- the exact hand-edit-the-declaration move this whole
+    tool was built to catch, reintroduced by the field added to catch it.
+
+    Absence is not contradiction, and it is not a silent pass either. An omitted
+    field means the author never measured, which is honest, so it is reported
+    as UNRECORDED rather than as a lie -- and it does not set the exit code,
+    because failing it would punish the contract that declines to guess over the
+    one that writes a comfortable number. What it must not do is disappear:
+    review reads the contract, so an omitted count means EFFECT-006 never fires,
+    and this is the only place that knows the real one.
+    """
+    declared_count = effect.get("instructed_call_sites")
+    scanned_count = len(item.instructed)
+    if isinstance(declared_count, int) and declared_count != scanned_count:
+        out.append((
+            name, "STALE",
+            "contract declares instructed_call_sites %d; the scan finds %d"
+            % (declared_count, scanned_count)))
+    elif declared_count is None and scanned_count:
+        out.append((
+            name, "UNRECORDED",
+            "the scan finds %d agent-instruction call site(s) and the contract "
+            "records no instructed_call_sites, so EFFECT-006 cannot fire on it"
+            % scanned_count))
+    declared_lane = effect.get("code_lane_identity")
+    scanned_lane = item.code_lane_identity()[0]
+    if isinstance(declared_lane, str) and declared_lane.strip() != scanned_lane:
+        out.append((
+            name, "STALE",
+            "contract declares code_lane_identity %s; the scan finds %s"
+            % (declared_lane.strip(), scanned_lane)))
+
+
 def cmd_reconcile(args):
     """Report every place the declaration claims more than the installation shows.
 
@@ -499,6 +588,13 @@ def cmd_reconcile(args):
 
     declared_effects = declared_doc.get("effects") or []
     drift = []
+    # Declared OBSERVATIONS that the fresh scan contradicts. Kept out of the
+    # four buckets below on purpose: those are a partition of the declared
+    # effects, and an effect can be CONFIRMED on its identity while its
+    # instructed-site count is a fiction. This is the check that stops a hand
+    # author from clearing EFFECT-006 by writing instructed_call_sites: 0 --
+    # the review rules read the contract, and only the scan can contradict it.
+    stale_observations = []
     unverifiable = []
     confirmed = []
     confirmed_on_key = []
@@ -514,6 +610,7 @@ def cmd_reconcile(args):
                 (name, "no probe covers this effect; the derivation is blind to it"))
             continue
         derived, reason = item.derived_identity()
+        _check_declared_observations(effect, item, name, stale_observations)
         # The reconciler asks a different question from the validator. The
         # validator asks whether the effect can be statically guaranteed;
         # derived_identity answers that, and answers "unknown" whenever one
@@ -621,12 +718,21 @@ def cmd_reconcile(args):
         print("OPEN  %s: undecided in the contract and %s" % (name, reason))
     for name, reason in undeclared:
         print("UNDECLARED  %s: %s" % (name, reason))
+    for name, label, reason in stale_observations:
+        print("%s  %s: %s" % (label, name, reason))
     print("%d drift, %d unverified, %d confirmed, %d open (of %d declared)"
           % (len(drift), len(unverifiable), len(confirmed), len(open_items),
              len([e for e in declared_effects if isinstance(e, dict)])))
     if undeclared:
         print("%d effect(s) performed but never declared" % len(undeclared))
-    return 1 if drift or undeclared else 0
+    contradicted = [o for o in stale_observations if o[1] == "STALE"]
+    unrecorded = [o for o in stale_observations if o[1] == "UNRECORDED"]
+    if contradicted:
+        print("%d declared observation(s) the scan contradicts" % len(contradicted))
+    if unrecorded:
+        print("%d effect(s) the scan measured and the contract does not record"
+              % len(unrecorded))
+    return 1 if drift or undeclared or contradicted else 0
 
 
 def cmd_render(args):

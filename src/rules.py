@@ -317,20 +317,32 @@ def _check_effects(doc, work, findings):
         # record the derivation now produces, and it exists so that record
         # cannot be read as a clean bill of health.
         #
-        # A marker cannot bind a sentence. When some call sites are prose telling
-        # an agent to run the command, the identity is enforced wherever the code
-        # performs the effect and unenforceable wherever the agent does, and no
-        # amount of editing the scripted sites closes that. WARN rather than FAIL
-        # because the declaration is TRUE -- the code really does carry it -- and
-        # because the remedy is usually to move the effect behind a script, which
-        # is a design change, not a correction to the contract.
+        # A marker cannot bind a sentence. When some call sites are prose
+        # telling an agent to run the command, this checker can establish the
+        # identity wherever the code performs the effect and NOWHERE about the
+        # routes the agent takes -- not because the agent omits the identity
+        # (an instruction can name the flag, and often does) but because there
+        # is no argument list to read until run time.
+        #
+        # FAIL, not WARN, and this was WARN for one release. The argument for
+        # WARN was that the declaration is true of the code. It is, and that is
+        # not the question the catalog asks: a route exists that performs an
+        # external mutation with no statically established identity discipline,
+        # so a retry through it can duplicate. That is an open failure
+        # boundary. "The remedy is a design change" is not a severity argument;
+        # several FAIL findings here need design changes.
+        #
+        # No _declared(effect_identity) guard. It used to have one, so an
+        # effect with an undecided identity AND instructed routes reported only
+        # the generic EFFECT-001 and the instructed routes vanished -- two
+        # defects with different remedies, one of them silent. Overlapping
+        # effect findings are normal in this catalog.
         instructed = effect.get("instructed_call_sites")
-        if (_declared(effect.get("effect_identity"))
-                and isinstance(instructed, int) and instructed > 0):
+        if isinstance(instructed, int) and instructed > 0:
             findings.append(Finding(
-                "EFFECT-006", "WARN",
-                f"Effect {name} declares an identity that {instructed} of its call site(s) cannot carry: those sites are agent instructions, not code, so the identity holds wherever the code performs this effect and nowhere else.",
-                "Route the effect through a script the agent calls, so the identity is applied by code rather than by an instruction the agent may not follow.",
+                "EFFECT-006", "FAIL",
+                f"Effect {name} is performed at {instructed} call site(s) that are agent instructions rather than code, so no static check can establish that those routes carry the identity; the declaration holds only where the code performs this effect.",
+                "Route the effect through a script the agent calls, so the identity is applied by code that can be checked rather than by an instruction whose arguments do not exist until run time.",
                 f"{path}.instructed_call_sites"))
         if contract == "reconcile" and not _declared(effect.get("readback")):
             findings.append(Finding(

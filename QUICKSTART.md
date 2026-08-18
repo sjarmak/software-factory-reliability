@@ -178,10 +178,19 @@ Every identity will read `unknown`, because a generated pack declares none.
 That is the starting state, not an error: an effect identity is a claim that
 the DESTINATION can tell a repeat from a new request, and nothing in your
 caller's code establishes it. Decide each one in `probes.yaml`, naming the
-value and the flags that carry it, and re-run. The derivation confirms an
-identity only when every scripted call site carries it and no site is an
-instruction to an agent, since an instruction has no argument list until run
-time and no static marker can bind it.
+value and the flags that carry it, and re-run. `effect_identity` is a
+guarantee about every route that performs the effect, so the derivation fills
+it in only when every scripted call site carries the identity and no site is an
+instruction to an agent: an instruction has no argument list until run time, so
+nothing static can establish what the agent will type. That is a limit on what
+this tool can show, not a finding that the agent omits the identity -- an
+instruction can name the flag, and often does.
+
+The narrower reading is recorded beside it rather than lost. `code_lane_identity`
+is what the code that performs the effect carries, and `instructed_call_sites`
+is how many routes are prose. Both are observations, never guarantees, and
+`reconcile` compares a declared value against a fresh scan, so writing
+`instructed_call_sites: 0` by hand does not clear the finding it produces.
 
 Under each effect are up to two lists, and they ask for different work. The
 first names call sites missing the marker: those are edits. The second is
@@ -211,8 +220,16 @@ carry, OPEN where both are undecided, UNVERIFIED where the installation
 supports more than the contract claims, and UNDECLARED for an effect your
 factory performs and your contract never mentions. Exit is nonzero on drift.
 
+It also checks the two fields a contract can copy from a derivation:
+STALE where a declared `instructed_call_sites` or `code_lane_identity`
+disagrees with a fresh scan, and UNRECORDED where the scan finds
+agent-instruction routes the contract never mentions. STALE is nonzero exit;
+UNRECORDED is not, because never having measured is honest and a contract that
+writes a comfortable zero is what STALE is for.
+
 Run against the installation this kit was written against, the answer on
-2026-08-18 was 3 drift, 1 unverified, 1 confirmed, 0 open. It read 3 drift, 2
+2026-08-18 was 3 drift, 1 unverified, 1 confirmed, 0 open, and 5 effects
+UNRECORDED covering 93 agent-instruction call sites. It read 3 drift, 2
 open, 0 confirmed earlier the same day, and the change was in this tool rather
 than in that factory: `confirmed` was not merely empty but unreachable for any
 factory with an agent-instruction call site, which is every factory this kit

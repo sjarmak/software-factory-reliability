@@ -77,7 +77,7 @@ and only `compare-and-set` or `transactional` as an operation.
 | `EFFECT-003` | FAIL | an effect's `unknown_state_policy` is undecided, `assume_success`, or `assume_failure`; one loses the effect and the other duplicates it | [explicit-unknown-state](../patterns/explicit-unknown-state.md) |
 | `EFFECT-004` | WARN | an effect declares `retry_contract: reconcile` with no readback query, so a retry cannot ask the destination whether the prior attempt landed | [durable-intent](../patterns/durable-intent.md) |
 | `EFFECT-005` | FAIL | an effect declares `retry_contract: at_least_once` with no `duplicate_disposition`, so a repeat is known to land as a second copy and nothing states what that costs | [effect-identity](../patterns/effect-identity.md) |
-| `EFFECT-006` | WARN | an effect declares an identity while some of its call sites are agent instructions rather than code, so the identity is enforced where code performs the effect and unenforceable where an agent does | [effect-identity](../patterns/effect-identity.md) |
+| `EFFECT-006` | FAIL | some of an effect's call sites are agent instructions rather than code, so no static check can establish that those routes carry the identity; the declaration holds only where the code performs the effect | [effect-identity](../patterns/effect-identity.md) |
 
 Accepted `retry_contract` values are `deduplicate`, `converge`, `reconcile`,
 and `at_least_once`. The `unknown_state_policy` vocabulary is six values and
@@ -191,6 +191,34 @@ A key the call sites do not carry is the sharpest `DRIFT` there is. A key beside
 a *different* key-shaped `effect_identity` is a contradiction and reports as
 drift rather than being silently preferred. `IDENT-002` reads both fields, so an
 attempt-scoped identity cannot enter through the key.
+
+#### Two derived fields that are observations, not guarantees
+
+`effect_identity` says the identity is carried unchanged across retries at every
+route that performs the effect. On an agent-driven factory some routes are
+sentences in a prompt, and nothing static can read an argument list that does not
+exist until an agent writes one at run time, so `infer` leaves the field
+`unknown` there. It is a limit on what a scanner can establish, not a finding
+that the agent omits the identity: an instruction can name the flag, and often
+does.
+
+Reporting only that would tell a reader nothing is established anywhere, so the
+narrower reading is recorded beside it in two fields `infer` writes:
+
+| field | what it says |
+|---|---|
+| `code_lane_identity` | the identity every readable scripted call site carries, or `unknown` |
+| `instructed_call_sites` | how many routes are agent instructions rather than code |
+
+Neither is a guarantee, and both are checked rather than trusted. `EFFECT-006`
+fails on any nonzero `instructed_call_sites`, and `reconcile` compares a declared
+value in either field against a fresh scan and reports `STALE` when they
+disagree. Without that comparison the pair would be self-clearing: the review
+rules read the contract, so a hand author could write `instructed_call_sites: 0`
+and go green with the installation untouched, which is the hand-edit-the-
+declaration move the whole tool exists to catch. An omitted field is not a
+contradiction; it means nobody measured, which is honest and is not the same as
+zero.
 
 **What a confirmation on a named key does not cover.** A static scan can check
 that every call site carries the token. It cannot check that the token's runtime

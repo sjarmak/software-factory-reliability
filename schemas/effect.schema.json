@@ -32,10 +32,15 @@
       "enum": ["deduplicate", "converge", "reconcile", "at_least_once", "unknown"],
       "description": "What holds when the same effect_identity is submitted more than once. deduplicate: the destination atomically stores the identity with the effect and returns the original receipt for repeats. converge: the operation is idempotent, so repeating it reaches the same final state. reconcile: the caller queries the destination for a prior effect (see readback) before repeating; weaker than destination deduplication, and it assumes callers for one identity are serialized. at_least_once: the destination has no dedup property and a repeat lands as a second copy; that is a decided answer, not an undecided one, and it requires duplicate_disposition. \"unknown\" records that the builder has not decided; the review rules flag it."
     },
+    "code_lane_identity": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The identity the CODE that performs this effect carries, when every readable scripted call site carries the same one; \"unknown\" otherwise. This is an OBSERVATION about the routes a static check can read, never the guarantee effect_identity states. The two differ exactly when instructed_call_sites is nonzero, and a consumer that reads this field as the retry guarantee has the over-claim this pair exists to prevent. Derived contracts write it; hand-written contracts may omit it, and reconcile compares it against a fresh scan when present."
+    },
     "instructed_call_sites": {
       "type": "integer",
       "minimum": 0,
-      "description": "How many call sites for this effect are natural-language instructions to an agent rather than code. A static marker cannot bind a sentence, so these sites sit outside any guarantee the code lane provides, however unanimous that lane is. Derived contracts record it because the alternative is to erase the difference between \"the code is unanimous and only the prompts are vague\" and \"the code does not do this at all\", which read identically once both collapse to unknown. Omitted means not measured, which is not the same as zero."
+      "description": "How many call sites for this effect are natural-language instructions to an agent rather than code. There is no argument list to read until an agent writes one at run time, so a static check can say nothing about whether those routes carry the identity -- which is NOT a claim that they omit it. Derived contracts record it because the alternative is to erase the difference between \"the code is unanimous and only the prompts are vague\" and \"the code does not do this at all\", which read identically once both collapse to unknown. Omitted means not measured, which is not the same as zero. This is an OBSERVATION, not a guarantee: review rule EFFECT-006 fails on any nonzero value, and reconcile compares a declared count against a fresh scan, so a hand-written 0 does not clear the finding."
     },
     "duplicate_disposition": {
       "type": "string",
