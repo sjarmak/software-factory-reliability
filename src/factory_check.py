@@ -393,7 +393,12 @@ def cmd_probes_init(args):
 # whose fix is to name the key. A key mistaken for prose reads UNVERIFIED and
 # prints the exact line to add. Neither can produce a false CONFIRMED, which is
 # the only direction this tool is never allowed to be wrong in.
-_KEY_SHAPED = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
+# The schema and the runtime share one grammar. `$` is written for the
+# schema, and Python's `$` also matches just before a trailing newline --
+# so a key of "idempotency_key\n" would pass the shape test, get stripped,
+# and confirm. \Z is the end of the string and nothing else.
+_KEY_PATTERN = r"^[A-Za-z_][A-Za-z0-9_.-]*$"
+_KEY_SHAPED = re.compile(_KEY_PATTERN[:-1] + r"\Z")
 
 
 def _comparable_key(effect, claimed):
@@ -405,10 +410,10 @@ def _comparable_key(effect, claimed):
     installation of something the contract never claimed.
     """
     explicit = effect.get("effect_identity_key")
-    if isinstance(explicit, str) and explicit.strip():
-        return explicit.strip()
-    if isinstance(claimed, str) and _KEY_SHAPED.match(claimed.strip()):
-        return claimed.strip()
+    if isinstance(explicit, str) and _KEY_SHAPED.match(explicit):
+        return explicit
+    if isinstance(claimed, str) and _KEY_SHAPED.match(claimed):
+        return claimed
     return None
 
 
@@ -423,14 +428,14 @@ def _identity_conflict(effect, claimed):
     a new field into a way to declare yourself correct.
     """
     explicit = effect.get("effect_identity_key")
-    if not (isinstance(explicit, str) and explicit.strip()):
+    if not (isinstance(explicit, str) and _KEY_SHAPED.match(explicit)):
         return None
-    if not (isinstance(claimed, str) and _KEY_SHAPED.match(claimed.strip())):
+    if not (isinstance(claimed, str) and _KEY_SHAPED.match(claimed)):
         return None
-    if claimed.strip() == explicit.strip():
+    if claimed == explicit:
         return None
     return ("the contract names two identities: effect_identity %s and "
-            "effect_identity_key %s" % (claimed.strip(), explicit.strip()))
+            "effect_identity_key %s" % (claimed, explicit))
 
 
 def _with_residual(reason, residual):
@@ -467,6 +472,7 @@ def cmd_reconcile(args):
     drift = []
     unverifiable = []
     confirmed = []
+    confirmed_on_key = []
     open_items = []
     for effect in declared_effects:
         if not isinstance(effect, dict):
@@ -546,6 +552,8 @@ def cmd_reconcile(args):
         else:
             confirmed.append(
                 (name, claimed_key, _with_residual(code_reason, residual)))
+            if claimed_key != claimed:
+                confirmed_on_key.append(name)
 
     # Effects the installation performs and the contract never mentions are
     # kept OUT of the drift bucket. Folding them in inflated drift past the
@@ -570,6 +578,16 @@ def cmd_reconcile(args):
         print("UNVERIFIED  %s: %s" % (name, note))
     for name, claimed, reason in confirmed:
         print("CONFIRMED  %s: effect_identity %s, %s" % (name, claimed, reason))
+    for name in confirmed_on_key:
+        # A static scan can check that every call site carries the token the
+        # contract named. It cannot check that the token's runtime VALUE is the
+        # identity the prose describes -- "a fresh execution nonce" keyed as
+        # idempotency_key confirms here and is unstable across retries. Say what
+        # was and was not checked rather than let the word CONFIRMED carry a
+        # claim nobody measured.
+        print("           %s: confirmed on the named key; whether that key's "
+              "value is the identity the prose describes is not statically "
+              "checkable" % name)
     for name, reason in open_items:
         print("OPEN  %s: undecided in the contract and %s" % (name, reason))
     for name, reason in undeclared:

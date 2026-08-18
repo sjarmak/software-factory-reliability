@@ -782,3 +782,41 @@ def test_ident_002_reads_the_key_as_well_as_the_prose(tmp_path):
     ids = [line.split()[1] for line in result.stdout.splitlines()
            if line.startswith(("FAIL ", "WARN "))]
     assert "IDENT-002" in ids, result.stdout
+
+
+def test_ident_002_reads_the_key_when_the_prose_is_undecided(tmp_path):
+    """The worst of the two shapes, and the one a fix hung off the prose misses.
+
+    An undecided effect_identity beside a decided attempt-scoped KEY is what
+    reconcile actually compares, so the contract is attempt-keyed in the only
+    field that reaches the call sites. Reporting only "the identity is missing"
+    describes the weaker half and leaves the retry defect unnamed.
+    """
+    clean = ISSUE_TO_PR.read_text()
+    doc = tmp_path / "unknown-prose-attempt-key.yaml"
+    doc.write_text(clean.replace(
+        "    effect_identity: notification_id",
+        "    effect_identity: unknown\n"
+        "    effect_identity_key: attempt_id", 1))
+    result = run_cli("review", str(doc), "--out", str(tmp_path))
+    ids = [line.split()[1] for line in result.stdout.splitlines()
+           if line.startswith(("FAIL ", "WARN "))]
+    assert "IDENT-002" in ids, result.stdout
+    assert "EFFECT-001" in ids, result.stdout
+
+
+def test_the_effect_matrix_distinguishes_two_contracts_by_their_key(tmp_path):
+    """Two contracts with identical prose and different keys are treated
+    differently by reconcile and by IDENT-002. A matrix that renders only the
+    prose shows them as the same row, so the artifact a human reviews cannot
+    show the field the machine acts on."""
+    clean = ISSUE_TO_PR.read_text()
+    doc = tmp_path / "keyed.yaml"
+    doc.write_text(clean.replace(
+        "    effect_identity: notification_id",
+        "    effect_identity: the (channel, thread) pair\n"
+        "    effect_identity_key: notify_dedupe_key", 1))
+    run_cli("render", str(doc), "--out", str(tmp_path))
+    matrix = (tmp_path / "effect-matrix.md").read_text()
+    assert "Identity key" in matrix
+    assert "notify_dedupe_key" in matrix

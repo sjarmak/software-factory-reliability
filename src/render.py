@@ -105,8 +105,11 @@ def effect_matrix(doc):
         lines.append("No effects declared.")
         return "\n".join(lines) + "\n"
     recon = _recon(doc)
-    lines.append("| Effect | Destination | Effect identity | Retry contract | Readback | Unknown-state policy | Reconciled by |")
-    lines.append("|---|---|---|---|---|---|---|")
+    # Identity key gets its own column. Two contracts with identical prose and
+    # different keys are treated differently by reconcile and by IDENT-002, and
+    # a matrix that shows only the prose renders them as the same row.
+    lines.append("| Effect | Destination | Effect identity | Identity key | Retry contract | Readback | Unknown-state policy | Reconciled by |")
+    lines.append("|---|---|---|---|---|---|---|---|")
     for effect in effects:
         covering = [
             str(entry.get("fact", ""))
@@ -117,6 +120,7 @@ def effect_matrix(doc):
             str(effect.get("name", "not declared")),
             str(effect.get("destination", "not declared")),
             str(effect.get("effect_identity", "not declared")),
+            str(effect.get("effect_identity_key") or "the identity above"),
             str(effect.get("retry_contract", "not declared")),
             str(effect.get("readback") or "none"),
             str(effect.get("unknown_state_policy") or "not declared"),

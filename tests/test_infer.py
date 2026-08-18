@@ -475,7 +475,7 @@ def test_the_schema_and_the_key_shape_agree(tmp_path):
     accept a value reconcile then treats as prose, or reject one it would have
     compared."""
     import json
-    from factory_check import _KEY_SHAPED
+    from factory_check import _KEY_PATTERN
     for name in ("factory.schema.json", "effect.schema.json"):
         doc = json.loads((ROOT / "schemas" / name).read_text())
         found = []
@@ -493,7 +493,7 @@ def test_the_schema_and_the_key_shape_agree(tmp_path):
         walk(doc)
         assert found, name
         for decl in found:
-            assert decl.get("pattern") == _KEY_SHAPED.pattern, (name, decl)
+            assert decl.get("pattern") == _KEY_PATTERN, (name, decl)
 
 
 def test_a_padded_key_is_a_schema_error_not_a_silent_strip(tmp_path):
@@ -1428,3 +1428,52 @@ def test_markdown_is_the_language_name_the_classifier_uses():
     """The specific case above, pinned so the rename cannot silently revert."""
     assert infer._language_of("prompts/mayor.md", "") == "md"
     assert "md" in _set_aside_gate_languages()
+
+
+def test_a_confirmation_on_a_named_key_says_what_it_did_not_check(tmp_path):
+    """CONFIRMED on a named key is a narrower claim than CONFIRMED on a key the
+    contract wrote as its whole identity, and the word is the same either way.
+
+    A static scan checks that every call site carries the token. It cannot check
+    that the token's runtime VALUE is the identity the prose describes -- "a
+    fresh execution nonce" declared as idempotency_key confirms here and is
+    unstable across every retry. Without this line the reader takes the stronger
+    reading, which is the one nobody measured.
+    """
+    result = _reconcile_with(
+        tmp_path,
+        PROSE_CONTRACT.replace(
+            "retry_contract: deduplicate",
+            "effect_identity_key: idempotency_key\n    retry_contract: deduplicate"))
+    assert result.returncode == 0, result.stdout
+    assert "not statically checkable" in result.stdout
+
+
+def test_a_plain_confirmation_carries_no_such_caveat(tmp_path):
+    """The other rail. If the note printed on every confirmation it would be
+    noise rather than a scope statement, and a reader would learn to skip it on
+    exactly the rows where it is load-bearing."""
+    result = _reconcile(tmp_path, {"bin/poster": KEYED})
+    assert result.returncode == 0
+    assert "CONFIRMED" in result.stdout
+    assert "not statically checkable" not in result.stdout
+
+
+def test_a_key_with_a_trailing_newline_does_not_confirm(tmp_path):
+    """The schema pattern is an ECMA-262 regex, where `$` is the end of the
+    string. Python's `re` is what actually enforces it, and there `$` also
+    matches just before a trailing newline -- so "idempotency_key\\n" passes the
+    schema, and passed the runtime shape test, and used to be stripped into a
+    CONFIRMED against a probe token it is not equal to.
+
+    The reading has to fall the safe way. A value the runtime cannot compare
+    reads UNVERIFIED and prints the line to add; it never reads CONFIRMED on a
+    comparison that only succeeded because the tool edited the contract first.
+    """
+    result = _reconcile_with(
+        tmp_path,
+        PROSE_CONTRACT.replace(
+            "retry_contract: deduplicate",
+            'effect_identity_key: "idempotency_key\\n"\n    retry_contract: deduplicate'))
+    assert "CONFIRMED" not in result.stdout, result.stdout
+    assert "UNVERIFIED" in result.stdout, result.stdout
