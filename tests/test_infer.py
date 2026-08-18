@@ -5,6 +5,8 @@ report one verdict is not a measurement, so the confirmed rail is tested as
 explicitly as the drift rail: the first two tests differ by a single call site.
 """
 
+import ast
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -1189,3 +1191,62 @@ def test_an_env_prefixed_command_is_not_a_bare_assignment(tmp_path):
     assert [s.path for s in item.unclassified] == []
     caller = [s for s in item.fenced if s.path == "bin/prefixed"]
     assert caller and caller[0].has_identity
+
+
+def _languages_the_classifier_can_emit():
+    """Every value _language_of can return, derived from its own source.
+
+    Two halves, because the function has two kinds of return: literals like
+    "shell", and `suffix.lstrip(".")` for a set of suffixes. The second is
+    computed, so the literals alone under-report it -- an enumerator that
+    misses a branch is the same defect as the hand-written list it replaces,
+    which is why the suffixes are collected and then actually run through the
+    function rather than transformed by hand here.
+    """
+    tree = ast.parse((ROOT / "src" / "infer.py").read_text())
+    body = next((n for n in tree.body
+                 if isinstance(n, ast.FunctionDef) and n.name == "_language_of"), None)
+    assert body is not None, "no module-level function named _language_of"
+    strings = {n.value for n in ast.walk(body)
+               if isinstance(n, ast.Constant) and isinstance(n.value, str)}
+    emitted = {n.value.value for n in ast.walk(body)
+               if isinstance(n, ast.Return)
+               and isinstance(n.value, ast.Constant)
+               and isinstance(n.value.value, str)}
+    suffixes = {t for t in strings if t.startswith(".") and len(t) > 1}
+    assert suffixes, "no file suffixes found in _language_of; the walk is broken"
+    for suffix in suffixes:
+        emitted.add(infer._language_of("probe" + suffix, ""))
+    return emitted
+
+
+def _set_aside_gate_languages():
+    """The language names set_aside_reason tests against, from the source."""
+    source = (ROOT / "src" / "infer.py").read_text()
+    match = re.search(r"if language not in \(([^)]*)\)", source)
+    assert match, "the set-aside language gate is no longer a tuple literal"
+    return set(re.findall(r'"([^"]+)"', match.group(1)))
+
+
+def test_every_language_the_set_aside_gate_names_can_actually_occur():
+    """A gate naming a language the classifier never emits is dead text.
+
+    It shipped naming "markdown" while _language_of returns "md", so prompt
+    markdown -- named in that function's own docstring as in scope -- was
+    excluded from quote handling by a string that could never match. The
+    branch read as covered and could not be taken.
+
+    Enumerated from the AST on both sides: a hand-written list of either half
+    is the same defect one level up.
+    """
+    emitted = _languages_the_classifier_can_emit()
+    named = _set_aside_gate_languages()
+    assert named <= emitted, (
+        "the set-aside gate names languages _language_of cannot return: "
+        f"{sorted(named - emitted)}; it emits {sorted(emitted)}")
+
+
+def test_markdown_is_the_language_name_the_classifier_uses():
+    """The specific case above, pinned so the rename cannot silently revert."""
+    assert infer._language_of("prompts/mayor.md", "") == "md"
+    assert "md" in _set_aside_gate_languages()

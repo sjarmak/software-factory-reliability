@@ -987,8 +987,18 @@ def set_aside_reason(segment, matchers, language):
     real parser to get right. An unsupported language sets nothing aside, which
     is the conservative direction: a site wrongly kept is reviewed, a site
     wrongly set aside is not.
+
+    YAML stays out on purpose rather than by omission. A command inside a YAML
+    scalar -- `run: "git push origin main"` -- is quoted by YAML and run by the
+    shell, so a shell-style walk would read the real invocation as a mention
+    and set aside exactly the unfenced push this looks for. Wrong in the
+    dangerous direction, which is the one direction this must never be.
+
+    The name below is "md" because that is what _language_of emits. It read
+    "markdown" for as long as this function existed, so the markdown case named
+    in the paragraph above was excluded by a string that could never match.
     """
-    if language not in ("shell", "unknown", "toml", "markdown"):
+    if language not in ("shell", "unknown", "toml", "md"):
         return ""
     if _BARE_ASSIGNMENT.match(segment.strip()):
         return ASSIGNED_LITERAL
