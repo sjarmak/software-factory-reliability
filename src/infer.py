@@ -39,7 +39,9 @@ naming convention, and every instrument in this kit that classified by name has
 inverted on the case it existed to catch.
 """
 
+import ast
 import fnmatch
+import functools
 import os
 import re
 from dataclasses import dataclass, field
@@ -360,6 +362,97 @@ def _bracket_depth(line):
     return sum(line.count(o) - line.count(c) for o, c in ("()", "[]", "{}"))
 
 
+# Mutating methods that add arguments to a command already built. `insert` is
+# here because a flag placed before a positional is still on the command.
+_ARGV_MUTATORS = ("extend", "append", "insert", "__iadd__")
+
+
+def _scope_statements(node):
+    """Every statement in this scope, not descending into a nested function.
+
+    Scope is half the binding below. A name assigned in one function and
+    extended in another names two different lists as far as this call is
+    concerned, and treating them as one is how a flag from unrelated code
+    confirms an identity that is not there.
+    """
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        yield child
+        yield from _scope_statements(child)
+
+
+def _mutated_name(statement):
+    """The variable a statement adds argv to, or None."""
+    if isinstance(statement, ast.AugAssign) and isinstance(statement.op, ast.Add):
+        if isinstance(statement.target, ast.Name):
+            return statement.target.id
+        return None
+    call = statement.value if isinstance(statement, ast.Expr) else None
+    if not isinstance(call, ast.Call):
+        return None
+    func = call.func
+    if not isinstance(func, ast.Attribute) or func.attr not in _ARGV_MUTATORS:
+        return None
+    return func.value.id if isinstance(func.value, ast.Name) else None
+
+
+@functools.lru_cache(maxsize=256)
+def python_command_assemblies(text):
+    """Map an assignment's line to the argv appended to it afterwards.
+
+    A command written as one bracket-balanced statement is one logical unit,
+    which is the rule `logical_units` implements and the right rule in general:
+    a line window cannot tell this invocation's flags from the next one's. It
+    is wrong for a command that is BUILT UP -- a list literal, then two
+    `extend` calls -- and that shape is ordinary Python, not a workaround.
+
+    Measured on a real installation: two Slack call sites were reported as
+    carrying no idempotency key while both pass one, appended two statements
+    after the literal.
+
+    This widens the search by NAME AND SCOPE, never by distance. The later
+    statement must mutate the same variable in the same scope, and anything
+    after that name is reassigned belongs to a different command. That
+    precision is the price of admission, because this is the one direction the
+    checker is otherwise not allowed to err in: it can only turn a withdrawn
+    identity into a confirmed one, and a false confirmed is the failure this
+    whole file is arranged to prevent.
+
+    Returns {assignment_line: appended_source}. A file that does not parse
+    yields nothing, which leaves the caller with the unassembled reading.
+    """
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return {}
+
+    assemblies = {}
+    scopes = [tree] + [
+        node for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    ]
+    for scope in scopes:
+        statements = sorted(_scope_statements(scope), key=lambda n: getattr(n, "lineno", 0))
+        open_assignment = {}
+        for statement in statements:
+            if isinstance(statement, ast.Assign):
+                for target in statement.targets:
+                    if isinstance(target, ast.Name):
+                        # A reassignment ends the previous command's assembly.
+                        open_assignment[target.id] = statement.lineno
+                        assemblies.setdefault(statement.lineno, [])
+                continue
+            name = _mutated_name(statement)
+            if name is None or name not in open_assignment:
+                continue
+            segment = ast.get_source_segment(text, statement)
+            if segment:
+                assemblies[open_assignment[name]].append(segment)
+
+    return {line: " ".join(parts) for line, parts in assemblies.items() if parts}
+
+
 def find_sites(text, language, matchers):
     """Yield (start_line, segment) for every unit matching any matcher.
 
@@ -473,6 +566,14 @@ def _collect(evidence, files, kind, matchers, path_globs, markers):
             # comment, a nearby unrelated call -- is not evidence about this
             # one, and counting it is exactly how a false confirmed is minted.
             found = next((m for m in markers if m in segment), "")
+            evidence_text = found
+            if not found and language == "python":
+                # The same command, assembled over several statements. Bound by
+                # variable and scope, never by proximity.
+                assembled = python_command_assemblies(text).get(line_no, "")
+                found = next((m for m in markers if m in assembled), "")
+                if found:
+                    evidence_text = found + " (appended to the same command)"
             evidence.sites.append(
                 CallSite(
                     path=rel,
@@ -480,7 +581,7 @@ def _collect(evidence, files, kind, matchers, path_globs, markers):
                     text=segment.strip()[:200],
                     kind=kind,
                     has_identity=bool(found),
-                    identity_evidence=found,
+                    identity_evidence=evidence_text,
                 )
             )
 

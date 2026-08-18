@@ -33,6 +33,12 @@ effects:
           - regex: 'gc slack publish-to-channel'
             languages: [shell, unknown]
             not_regex: ['--help']
+          # Mirrors the python matcher in probes/gc-shell-city.yaml. A fixture
+          # simpler than the real probe pack proves a property of the fixture.
+          - regex: '["'']publish-to-channel["'']'
+            languages: [python]
+            not_regex: ['==', 'assert', '--help', 'startswith', ' in ']
+            require_regex: '["'']publish-to-channel["'']\\s*[,\\])]'
       instructed:
         path_globs: ["formulas/*.toml"]
         any_of:
@@ -554,3 +560,131 @@ def test_clean_scripted_sites_are_reported_alongside_an_instructed_one(tmp_path)
     assert "agent instructions" in reason
     assert "carry no" not in reason
     assert "1 scripted site(s) carry it" in reason
+
+
+# Both taken from a real installation. The flag is on the same command list as
+# the invocation; it is added by a later statement because the list is built up
+# rather than written as one literal, which is ordinary Python and not a
+# workaround for anything.
+ASSEMBLED = '''#!/usr/bin/env python3
+import subprocess
+
+
+def post(body, session_id):
+    command = [
+        "gc", "slack", "publish-to-channel",
+        "--session", session_id,
+    ]
+    command.extend(["--body-file", "/tmp/m"])
+    command.extend(["--idempotency-key", "poster:" + body])
+    return subprocess.run(command)
+'''
+
+ASSEMBLED_AUGMENTED = '''#!/usr/bin/env python3
+import subprocess
+
+
+def post(body, sid):
+    cmd = ["gc", "slack", "publish-to-channel", "--session", sid]
+    cmd += ["--body-file", "/tmp/m"]
+    cmd += ["--idempotency-key", "mirror:" + body]
+    return subprocess.run(cmd)
+'''
+
+ASSEMBLED_BARE = '''#!/usr/bin/env python3
+import subprocess
+
+
+def post(body, session_id):
+    command = [
+        "gc", "slack", "publish-to-channel",
+        "--session", session_id,
+    ]
+    command.extend(["--body-file", "/tmp/m"])
+    return subprocess.run(command)
+'''
+
+
+def test_a_flag_appended_to_the_same_command_list_counts(tmp_path):
+    """A command assembled over several statements is one invocation.
+
+    Measured on a real city: two Slack call sites were reported as carrying no
+    idempotency key while both pass one, because the flag is appended to the
+    same list two statements after the literal. The unit rule that produces
+    this is right in general -- a bracket-balanced statement is what a flag can
+    belong to, and a line window cannot tell one invocation's flags from the
+    next one's -- and it is wrong for a list that is built up.
+
+    So the search widens by NAME AND SCOPE rather than by distance: the later
+    statement has to mutate the same variable inside the same function. That is
+    the same command object, not a nearby one.
+
+    This is the direction the checker is normally not allowed to err in, since
+    it turns a withdrawn identity into a confirmed one. It is admissible here
+    only because the binding is exact; a window of N lines would not be.
+    """
+    value, reason = _identity(tmp_path, {"bin/poster": ASSEMBLED})
+    assert value == "idempotency_key", reason
+    assert "1 scripted" in reason
+
+
+def test_augmented_assignment_assembles_the_same_way(tmp_path):
+    value, reason = _identity(tmp_path, {"bin/mirror": ASSEMBLED_AUGMENTED})
+    assert value == "idempotency_key", reason
+
+
+def test_assembly_does_not_invent_an_identity_that_is_not_there(tmp_path):
+    """The rail that matters, because this widening can only mint confirmeds.
+
+    Same file, same shape, same number of appends, and no key anywhere in it.
+    If this passes, the assembly step is reading something other than the
+    marker and every green above is worthless.
+    """
+    value, reason = _identity(tmp_path, {"bin/poster": ASSEMBLED_BARE})
+    assert value == "unknown", reason
+    assert "1 of 1 scripted" in reason
+
+
+def test_a_flag_on_a_different_command_does_not_satisfy_this_one(tmp_path):
+    """Binding by name is the whole claim, so it is tested by name collision.
+
+    Two lists in one function: the one that is invoked carries no key, and an
+    unrelated one does. Widening by proximity confirms the identity here, which
+    is precisely the false confirmed the unit rule exists to prevent.
+    """
+    source = '''#!/usr/bin/env python3
+import subprocess
+
+
+def post(body, sid):
+    other = ["gc", "mail", "send"]
+    other.extend(["--idempotency-key", "unrelated"])
+    command = ["gc", "slack", "publish-to-channel", "--session", sid]
+    command.extend(["--body-file", "/tmp/m"])
+    subprocess.run(other)
+    return subprocess.run(command)
+'''
+    value, reason = _identity(tmp_path, {"bin/poster": source})
+    assert value == "unknown", reason
+
+
+def test_a_flag_added_in_another_function_does_not_count(tmp_path):
+    """Scope is half the binding. A module-level name reused in two functions
+    is common, and the second function's flags say nothing about the first's
+    call.
+    """
+    source = '''#!/usr/bin/env python3
+import subprocess
+
+
+def post(sid):
+    command = ["gc", "slack", "publish-to-channel", "--session", sid]
+    return subprocess.run(command)
+
+
+def elsewhere(command):
+    command.extend(["--idempotency-key", "not-this-call"])
+    return command
+'''
+    value, reason = _identity(tmp_path, {"bin/poster": source})
+    assert value == "unknown", reason
