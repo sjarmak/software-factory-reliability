@@ -136,7 +136,68 @@ Both runs of this drill are committed, with a line-by-line reading, in
 [evidence/case-studies/stale-writer/](evidence/case-studies/stale-writer/).
 Diff your output against them; they are byte-for-byte reproducible.
 
-## 6. Start your own contract
+## 6. Derive a contract from your own factory
+
+The contract is hand-written, which means it can be edited to a decided value
+while your factory stays exactly as it was. Findings go green and nothing is
+fixed. Start from what your installation actually shows instead.
+
+```
+python3 src/factory_check.py probes-init /path/to/your/factory --write probes.yaml
+```
+
+This scans for effects a factory commonly performs on something outside itself
+(pushes, pull requests, releases, deploys, messages, mail, object-store writes)
+and writes a probe pack naming the ones it found and the files it found them
+in. Read the two lists it prints. The first is the effects; the second is call
+sites per top-level directory, and it is there because a scan cannot tell a
+directory your factory WRITES from one it RUNS. In a generated report or a log,
+`git push` is a description of a call site rather than one. Re-run with
+`--exclude <dir>` for each directory that is output, until the numbers describe
+your code.
+
+Then derive:
+
+```
+python3 src/factory_check.py infer /path/to/your/factory --probes probes.yaml
+```
+
+Every identity will read `unknown`, because a generated pack declares none.
+That is the starting state, not an error: an effect identity is a claim that
+the DESTINATION can tell a repeat from a new request, and nothing in your
+caller's code establishes it. Decide each one in `probes.yaml`, naming the
+value and the flags that carry it, and re-run. The derivation confirms an
+identity only when every scripted call site carries it and no site is an
+instruction to an agent, since an instruction has no argument list until run
+time and no static marker can bind it.
+
+`out/factory.derived.yaml` is the result, with the reason for every value on
+the line above it, and `out/evidence.json` holds the call sites a script can
+read.
+
+Once you have a hand-written contract as well, hold the two against each other:
+
+```
+python3 src/factory_check.py reconcile my-factory.yaml /path/to/your/factory --probes probes.yaml
+```
+
+It reports DRIFT where the contract claims an identity the call sites do not
+carry, OPEN where both are undecided, UNVERIFIED where the installation
+supports more than the contract claims, and UNDECLARED for an effect your
+factory performs and your contract never mentions. Exit is nonzero on drift.
+
+Run against the installation this kit was written against, the answer on
+2026-08-18 was 3 drift, 2 open, 0 confirmed. Nothing confirmed, which is the
+correct reading of a factory that performs four of these effects with no
+written behaviour for a half-success.
+
+That number is not pinned by the test suite, because it is a property of an
+installation this repository does not contain. It is dated for the same reason
+the FAIL/WARN counts above carry their history: a measurement quoted without a
+date is indistinguishable from one that is still true. Re-derive rather than
+trust it.
+
+To start a contract by hand instead, or alongside:
 
 ```
 python3 src/factory_check.py init my-factory.yaml
@@ -149,8 +210,10 @@ and come back here with its inventory.
 
 Then work the loop:
 
-1. **Describe**: fill in the generated contract with your workers, promises,
-   boundaries, and external systems, as they actually are today.
+1. **Describe**: fill in the contract with your workers, promises, boundaries,
+   and external systems, as they actually are today. For the effects, start
+   from `infer` rather than from memory: the parts a scan can establish should
+   not be recalled, and the parts it cannot are the ones worth your attention.
 2. **Review**: `factory-check review my-factory.yaml` and read each finding
    against its pattern page.
 3. **Fix**: move enforcement to the boundary the pattern names, or record an
