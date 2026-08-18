@@ -81,6 +81,48 @@ Accepted `retry_contract` values are `deduplicate`, `converge`, and
 `reconcile`. Accepted `unknown_state_policy` values are `block_and_escalate`,
 `reconcile_then_block`, and `manual_review`.
 
+#### `effect_identity` is prose; `effect_identity_key` is a token
+
+`effect_identity` is a human sentence describing what identifies the effect at
+the destination. Plenty of real identities are composites worth a sentence: a
+push is identified by the remote, the ref, and the commit oid together, and no
+single field names it.
+
+`reconcile` compares against a probe pack's `identity.name`, which is the token
+a scanner binds at call sites. Those are two vocabularies. Comparing them
+directly confirms only when the author happened to guess the token, and can
+never confirm a composite. That is not a cosmetic wrong answer: on those
+effects, marking the last unmarked call site does not move the verdict, which is
+doing the right thing and the reading not changing.
+
+So write the sentence in `effect_identity` and, when a single token carries it
+through the code, name that token in `effect_identity_key`:
+
+```yaml
+- name: git_push
+  effect_identity: >-
+    the (remote, ref, intended commit oid) triple; the oid is what the readback
+    compares, so the identity survives the branch being force-updated
+  effect_identity_key: expected_remote_ref
+```
+
+Reconcile compares the key when one is named and the prose otherwise. A prose
+identity with no key reads `UNVERIFIED` and prints the exact line to add; it
+never reads `DRIFT` for being a sentence.
+
+The field is a way to say what you meant, not a way to declare yourself correct.
+A key the call sites do not carry is the sharpest `DRIFT` there is. A key beside
+a *different* key-shaped `effect_identity` is a contradiction and reports as
+drift rather than being silently preferred. `IDENT-002` reads both fields, so an
+attempt-scoped identity cannot enter through the key.
+
+**What a confirmation on a named key does not cover.** A static scan can check
+that every call site carries the token. It cannot check that the token's runtime
+*value* is the identity the prose describes: a fresh execution nonce declared as
+`idempotency_key` confirms here and is unstable across every retry. Reconcile
+prints that limit on exactly those rows. Nothing in this kit closes it, and a
+future version that claimed to would be lying about what a scanner can see.
+
 ### Artifacts and publication
 
 | Rule | Severity | Fires when | Pattern |

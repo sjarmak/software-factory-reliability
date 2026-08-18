@@ -165,6 +165,14 @@ never mentions. DRIFT is what a contract edited ahead of the code looks like:
 editing the claim back down turns it into OPEN, an undecided boundary, and only
 the call sites can turn it into CONFIRMED.
 
+An identity worth a sentence stays a sentence. Write the composite in
+`effect_identity`, and name the token that carries it through the code in
+`effect_identity_key`; reconcile compares the token when one is named and prints
+the line to add when one is not. A confirmation on a named key says the token is
+at every call site, and does not say the token's runtime value is the identity
+the sentence describes -- reconcile prints that limit on those rows rather than
+letting the word CONFIRMED carry a claim no scanner can make.
+
 [QUICKSTART.md](QUICKSTART.md) walks the full first session under an hour, and
 [`docs/contract-reference.md`](docs/contract-reference.md) documents every
 section and all twenty-three rules.
