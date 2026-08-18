@@ -912,3 +912,61 @@ def test_the_credit_line_names_how_much_of_the_implementation_pins(tmp_path):
     caller = [s for s in item.fenced if s.path == "bin/ship"]
     assert caller and caller[0].has_identity
     assert "1 of 2 site(s) in its implementation pin it" in caller[0].identity_evidence
+
+
+def _git_install(tmp_path, files, gitignore):
+    import subprocess as sp
+    root = tmp_path / "install"
+    root.mkdir()
+    for rel, text in files.items():
+        path = root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    (root / ".gitignore").write_text(gitignore)
+    for cmd in (["git", "init", "-q"],
+                ["git", "config", "user.email", "t@example.invalid"],
+                ["git", "config", "user.name", "t"]):
+        sp.run(cmd, cwd=root, check=True, capture_output=True)
+    return root
+
+
+def test_a_vcs_ignored_path_is_not_a_call_site(tmp_path):
+    """A command RECORDED in a generated log is not a command run.
+
+    The installation's own .gitignore is a declaration BY the installation
+    about which of its paths are output, which is why this can be derived
+    instead of hand-written. Measured on the city this kit was written
+    against, the scaffold reported 401 git_push call sites in 158 files and
+    the three noisiest directories were all ignored.
+    """
+    root = _git_install(
+        tmp_path,
+        {"bin/ship": "#!/usr/bin/env bash\ngit push origin main\n",
+         "logs/run.log": "2026-08-18 ran: git push origin main\n"},
+        "logs/\n")
+    scanned = {rel for rel, _, _ in infer.scan_files(
+        root, {"include_globs": ["**"], "respect_vcs_ignore": True})}
+    assert "bin/ship" in scanned
+    assert "logs/run.log" not in scanned
+    # Without the flag the log is read, which is the behaviour a pack that does
+    # not ask for this still gets.
+    plain = {rel for rel, _, _ in infer.scan_files(root, {"include_globs": ["**"]})}
+    assert "logs/run.log" in plain
+
+
+def test_an_unavailable_ignore_check_is_reported_not_swallowed(tmp_path):
+    """Asked-for and not-applied must never read as applied.
+
+    An empty ignore set means "nothing is ignored"; a missing git means "this
+    was never checked". A scan that reports the first when the second is true
+    claims a scope it never had.
+    """
+    root = tmp_path / "plain"
+    (root / "bin").mkdir(parents=True)
+    (root / "bin" / "ship").write_text("#!/usr/bin/env bash\ngit push origin main\n")
+    notes = []
+    scanned = {rel for rel, _, _ in infer.scan_files(
+        root, {"include_globs": ["**"], "respect_vcs_ignore": True}, notes)}
+    assert "bin/ship" in scanned
+    assert notes and "could not be checked" in notes[0]
+    assert "scanned as if it were source" in notes[0]

@@ -219,9 +219,18 @@ def cmd_review(args):
     return 0
 
 
-def _derive(args):
+def _derive(args, notes=None):
     probes = infer_mod.load_probes(args.probes)
-    return infer_mod.derive(args.installation, probes)
+    return infer_mod.derive(args.installation, probes, notes)
+
+
+def _print_scan_notes(notes):
+    """A filter the scan was asked for and could not apply is printed, never
+    swallowed. The alternative is a report whose scope claim is wrong in the
+    reassuring direction: it looks like a clean scan of source, and it is a
+    scan of source plus every log the installation writes."""
+    for note in notes:
+        print("SCAN  %s" % note)
 
 
 def _emit_derived_yaml(contract, evidence):
@@ -271,7 +280,9 @@ def _emit_derived_yaml(contract, evidence):
 
 
 def cmd_infer(args):
-    contract, evidence = _derive(args)
+    notes = []
+    contract, evidence = _derive(args, notes)
+    _print_scan_notes(notes)
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -321,8 +332,13 @@ def cmd_probes_init(args):
         "include_globs": ["**"],
         "exclude_globs": excludes,
         "prune_nested_repos": not args.include_nested_repos,
+        # A path the installation's own VCS ignores is one it declares to be
+        # generated output, so the command in it was RECORDED, not run.
+        "respect_vcs_ignore": not args.scan_ignored_paths,
     }
-    found, scanned = scaffold_mod.survey(args.installation, scan)
+    notes = []
+    found, scanned = scaffold_mod.survey(args.installation, scan, notes)
+    _print_scan_notes(notes)
     if not found:
         print("read %d file(s) and found no call sites from the built-in "
               "catalog." % scanned)
@@ -385,7 +401,9 @@ def cmd_reconcile(args):
     declared_doc = _load_valid_contract(args.file)
     if declared_doc is None:
         return 2
-    _, evidence = _derive(args)
+    notes = []
+    _, evidence = _derive(args, notes)
+    _print_scan_notes(notes)
     by_name = {e.name: e for e in evidence}
 
     declared_effects = declared_doc.get("effects") or []
@@ -535,6 +553,10 @@ def main(argv=None):
     p_pinit.add_argument("--include-nested-repos", action="store_true",
                          help="do not skip subdirectories that are themselves "
                               "git repositories")
+    p_pinit.add_argument("--scan-ignored-paths", action="store_true",
+                         help="read paths the installation's own VCS ignores; "
+                              "these are usually logs and generated reports in "
+                              "which the command was recorded, not run")
     p_pinit.set_defaults(func=cmd_probes_init)
 
     p_recon = sub.add_parser(

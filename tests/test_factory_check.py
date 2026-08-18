@@ -643,3 +643,47 @@ def test_reconcile_still_reports_drift_when_the_code_lane_misses_the_identity(tm
     assert line, out.stdout
     assert "1 of 1 code call site(s) carry no idempotency_key" in line[0]
     assert out.returncode == 1
+
+
+def _tiny_git_install(tmp_path):
+    root = tmp_path / "install"
+    (root / "bin").mkdir(parents=True)
+    (root / "logs").mkdir(parents=True)
+    (root / "bin" / "ship").write_text(
+        "#!/usr/bin/env bash\ngit push origin main\n")
+    (root / "logs" / "run.log").write_text(
+        "2026-08-18 ran: git push origin main\n" * 40)
+    (root / ".gitignore").write_text("logs/\n")
+    for cmd in (["git", "init", "-q"],
+                ["git", "config", "user.email", "t@example.invalid"],
+                ["git", "config", "user.name", "t"]):
+        subprocess.run(cmd, cwd=root, check=True, capture_output=True)
+    return root
+
+
+def test_probes_init_does_not_scaffold_globs_for_vcs_ignored_output(tmp_path):
+    """Driven through the CLI, because the default was dead on that path.
+
+    `survey` carried the right default and `cmd_probes_init` built its own scan
+    dict and overrode it, so a unit test on the scanner passed while the only
+    command anyone runs was unaffected. The generated pack is the artifact; it
+    is what this asserts.
+    """
+    root = _tiny_git_install(tmp_path)
+    pack = tmp_path / "probes.yaml"
+    out = run_cli("probes-init", str(root), "--write", str(pack))
+    assert out.returncode == 0, out.stdout + out.stderr
+    text = pack.read_text()
+    assert "'bin/*'" in text
+    assert "logs/" not in text, text
+
+
+def test_probes_init_can_be_told_to_read_ignored_paths(tmp_path):
+    """The escape hatch exists and is the rail that proves the default is doing
+    something, rather than the glob never being generated for another reason."""
+    root = _tiny_git_install(tmp_path)
+    pack = tmp_path / "probes.yaml"
+    out = run_cli("probes-init", str(root), "--write", str(pack),
+                  "--scan-ignored-paths")
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert "logs/" in pack.read_text()

@@ -44,6 +44,7 @@ import fnmatch
 import functools
 import os
 import re
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -303,16 +304,69 @@ def _pruned_dir_names(exclude):
     return names
 
 
-def scan_files(root, scan):
-    """Yield (relative path, text, language) for every in-scope readable file."""
+def vcs_ignored_prefixes(root):
+    """Paths the installation's own VCS declares to be generated output.
+
+    Returns (prefixes, unavailable_reason). A factory's .gitignore is a
+    declaration BY THE INSTALLATION about which of its paths are output rather
+    than source, which makes it the one place this can be derived instead of
+    hand-written. Measured on the city this kit was written against: the
+    scaffold found 401 git_push call sites in 158 files, and the three noisiest
+    directories (.gc, graphify-out, a stray worktree) are all ignored -- logs
+    and reports in which the command was RECORDED, not run.
+
+    The reason is returned rather than folded into an empty set. An empty set
+    means "nothing is ignored"; a missing git means "this was never checked",
+    and a scan that reports the first when the second is true is a scan whose
+    scope claim is wrong. The caller prints it.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(root), "ls-files", "-o", "-i",
+             "--exclude-standard", "--directory"],
+            capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return set(), "git could not run (%s)" % exc
+    if out.returncode != 0:
+        return set(), "not a git repository, or git refused: %s" % (
+            (out.stderr or "").strip()[:100] or "exit %d" % out.returncode)
+    prefixes = set()
+    for line in out.stdout.splitlines():
+        line = line.strip().rstrip("/")
+        if line:
+            prefixes.add(line)
+    return prefixes, None
+
+
+def scan_files(root, scan, notes=None):
+    """Yield (relative path, text, language) for every in-scope readable file.
+
+    `notes` collects anything the scan was ASKED to do and could not. A scan
+    that quietly proceeds after failing to apply a filter reports a scope it
+    never had, which is the failure this whole tool is about.
+    """
     root = Path(root)
     include = scan.get("include_globs") or ["**"]
     exclude = scan.get("exclude_globs") or []
     max_bytes = int(scan.get("max_file_bytes", 2_000_000))
     pruned = _pruned_dir_names(exclude)
     prune_nested = bool(scan.get("prune_nested_repos"))
+    ignored = set()
+    if scan.get("respect_vcs_ignore"):
+        ignored, unavailable = vcs_ignored_prefixes(root)
+        if unavailable is not None and notes is not None:
+            notes.append(
+                "the pack asked to skip VCS-ignored paths and that could not be "
+                "checked (%s); generated output was scanned as if it were source"
+                % unavailable)
     for directory, subdirs, filenames in os.walk(root, followlinks=False):
         subdirs[:] = sorted(d for d in subdirs if d not in pruned)
+        if ignored:
+            here = Path(directory).relative_to(root)
+            subdirs[:] = [
+                d for d in subdirs
+                if str(here / d if str(here) != "." else Path(d)) not in ignored
+            ]
         if prune_nested:
             # A subdirectory that is itself a repository holds another
             # project's code. Counting its call sites as this installation's
@@ -326,6 +380,8 @@ def scan_files(root, scan):
             if not path.is_file() or path.is_symlink():
                 continue
             rel = str(path.relative_to(root))
+            if rel in ignored:
+                continue
             if not _matches_any(rel, include) or _matches_any(rel, exclude):
                 continue
             try:
@@ -806,9 +862,9 @@ def _collect(evidence, files, kind, matchers, path_globs, markers):
             )
 
 
-def derive(root, probes):
+def derive(root, probes, notes=None):
     """Return (contract dict, evidence list) derived from the installation."""
-    files = list(scan_files(root, probes.get("scan") or {}))
+    files = list(scan_files(root, probes.get("scan") or {}, notes))
     evidence = [probe_effect(e, files) for e in probes["effects"]]
 
     effects = []

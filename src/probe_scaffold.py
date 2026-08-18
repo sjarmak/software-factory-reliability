@@ -174,7 +174,7 @@ _PREFILTER = re.compile("|".join("(?:%s)" % e["patterns"][i]
                                  for i in range(len(e["patterns"]))))
 
 
-def survey(root, scan=None):
+def survey(root, scan=None, notes=None):
     """Return (effects found, number of files read).
 
     Each value in the map is a dict with the relative paths that matched and
@@ -190,13 +190,20 @@ def survey(root, scan=None):
         # exposed to nested checkouts and worktrees. `infer` with a
         # hand-written pack names its own directories and rarely is.
         "prune_nested_repos": True,
+        # Same reason, one step further: a path the installation's own
+        # .gitignore excludes is one it declares to be generated output, and a
+        # command RECORDED in a log is not a command run. This is the part of
+        # the pack that can be derived instead of hand-written, which is the
+        # difference between a pack somebody else can try and one only its
+        # author can use.
+        "respect_vcs_ignore": True,
     }
     # Held in memory once rather than re-walked per effect: the walk is the
     # only part that touches the filesystem, and re-doing it ten times turned a
     # five second scan into a minute.
     files = []
     scanned = 0
-    for rel, text, language in infer.scan_files(root, scan):
+    for rel, text, language in infer.scan_files(root, scan, notes):
         scanned += 1
         if _PREFILTER.search(text):
             files.append((rel, text, language))
@@ -338,6 +345,10 @@ def render(root, found, scanned):
         "harness_globs: &harness_globs []",
         "",
         "scan:",
+        "  # A path this installation's own VCS ignores is one it declares to",
+        "  # be generated output. Turn this off and the scan reads its own",
+        "  # logs and reports as call sites.",
+        "  respect_vcs_ignore: true",
         "  include_globs:",
     ]
     for glob in _include_globs(found):
