@@ -1058,3 +1058,49 @@ def test_an_unquoted_command_is_not_set_aside(tmp_path):
     item = evidence[0]
     assert [s.path for s in item.missing_identity] == ["bin/real"]
     assert item.quoted_unclassified == []
+
+
+def test_a_separator_inside_quotes_does_not_end_the_command():
+    assert infer.split_shell_segments(
+        "run --command 'cd /tmp && git push origin main' --json"
+    ) == ["run --command 'cd /tmp && git push origin main' --json"]
+
+
+def test_a_separator_outside_quotes_still_ends_the_command():
+    """The rail that keeps the quote tracking from swallowing every split.
+
+    Without this the fix for the line above is indistinguishable from returning
+    the whole line always, which would let a neighbouring command's flag
+    satisfy this one -- the error logical_units' own docstring names first.
+    """
+    assert infer.split_shell_segments("a --x && b --y ; c | d") == [
+        "a --x ", " b --y ", " c ", " d"]
+
+
+def test_an_unbalanced_quote_widens_rather_than_truncates():
+    assert infer.split_shell_segments("echo 'oops && b") == ["echo 'oops && b"]
+
+
+def test_a_quoted_command_split_at_its_own_separator_is_still_seen_as_quoted(tmp_path):
+    """Segmentation and the quoted-mention test are one mechanism, not two.
+
+    Measured on the gas-city installation: a compatibility check passes a
+    fixture command to a permission tester,
+
+        amp permissions test shell_command --command 'cd /tmp && git push ...'
+
+    and a quote-blind split cut it at the `&&` INSIDE the quotes. The tail
+    began mid-string, so the quote tracker never saw the opening quote and a
+    string argument was reported as an unfenced push somebody should go fix.
+    """
+    root, probes = _install(tmp_path, {
+        "bin/checks": (
+            "#!/usr/bin/env bash\n"
+            "probe --command 'cd /tmp && gc slack publish-to-channel --session x' --json\n"
+        ),
+        "bin/keyed": KEYED,
+    })
+    _, evidence = infer.derive(root, infer.load_probes(probes))
+    item = evidence[0]
+    assert [s.path for s in item.missing_identity] == []
+    assert [s.path for s in item.quoted_unclassified] == ["bin/checks"]

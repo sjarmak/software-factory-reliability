@@ -468,6 +468,59 @@ def scan_files(root, scan, notes=None):
 # on the NEXT command in the same pipeline satisfies this one.
 _SHELL_SEPARATORS = re.compile(r"\|\||&&|[;|&]")
 
+
+def split_shell_segments(line):
+    """Split a shell line on command separators OUTSIDE quoted strings.
+
+    A quote-blind split cuts `--command 'cd /tmp && git push origin main'` in
+    half, and both halves are wrong in ways that matter. The tail becomes a
+    segment beginning mid-string, so the quoted-mention test cannot see the
+    opening quote and reports prose as an invocation. Worse in the other
+    direction: a segment that starts inside a quote can pick up a flag that
+    belongs to the enclosing command, and a marker collected that way mints a
+    call site that reads as keyed when nothing keys it.
+
+    Unlike _strip_trailing_comment above, this is not left quote-blind, because
+    its error is not one-directional.
+
+    Backslash escapes are honoured; command substitution and heredoc bodies are
+    not tracked. An unbalanced quote leaves the rest of the line in one segment,
+    which is the same direction as a continuation: wider, and therefore visible
+    as a too-permissive marker rather than a silent miss.
+    """
+    out, current, quote, index = [], [], None, 0
+    while index < len(line):
+        char = line[index]
+        if quote is None:
+            if char == "\\" and index + 1 < len(line):
+                current.append(char)
+                current.append(line[index + 1])
+                index += 2
+                continue
+            if char in "'\"":
+                quote = char
+                current.append(char)
+                index += 1
+                continue
+            found = _SHELL_SEPARATORS.match(line, index)
+            if found:
+                out.append("".join(current))
+                current = []
+                index = found.end()
+                continue
+        else:
+            if char == "\\" and quote == '"' and index + 1 < len(line):
+                current.append(char)
+                current.append(line[index + 1])
+                index += 2
+                continue
+            if char == quote:
+                quote = None
+        current.append(char)
+        index += 1
+    out.append("".join(current))
+    return out
+
 COMMENT_PREFIX_BY_LANGUAGE = {
     "shell": "#",
     "python": "#",
@@ -536,7 +589,7 @@ def logical_units(text, language):
             index += 1
             if joined.lstrip().startswith(prefix or "\0"):
                 continue
-            for segment in _SHELL_SEPARATORS.split(_normalize(joined)):
+            for segment in split_shell_segments(_normalize(joined)):
                 segment = _strip_trailing_comment(segment, prefix)
                 if segment.strip():
                     yield start, segment
