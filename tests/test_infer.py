@@ -514,3 +514,43 @@ def test_one_invocation_matching_two_patterns_is_one_site(tmp_path):
     files = list(infer.scan_files(root, {"include_globs": ["**"]}))
     evidence = infer.probe_effect(probe, files)
     assert len(evidence.sites) == 1, [(s.path, s.line) for s in evidence.sites]
+
+
+def test_an_instructed_site_does_not_hide_how_the_scripted_sites_scored(tmp_path):
+    """Both facts reach the reader, because they call for different work.
+
+    Found by running this on a real city: agent_mail_nudge reported "2 call
+    site(s) are agent instructions" and nothing else, while 30 of its 30
+    scripted sites carried no nudge_id. The verdict was right and the reason
+    named the smaller number. An instructed site is a design problem someone
+    has to think about; thirty scripted sites missing a flag is a patch, and a
+    reader who only sees the first never learns the second is available.
+
+    Mutation that flips this: drop the missing-identity clause from the
+    instructed branch of derived_identity and report only the instructed count.
+    """
+    value, reason = _identity(tmp_path, {
+        "bin/a": BARE,
+        "bin/b": BARE,
+        "formulas/f.toml": 'prompt = "run gc slack publish-to-channel at the end"\n',
+    })
+    assert value == "unknown"
+    assert "agent instructions" in reason
+    assert "2 of 2 scripted" in reason
+
+
+def test_clean_scripted_sites_are_reported_alongside_an_instructed_one(tmp_path):
+    """The other rail: the added clause must not always read as a failure.
+
+    Without this, a reason that hardcoded "N of N scripted call sites carry no
+    X" would pass the test above while lying about a codebase whose scripted
+    sites are fine and whose only problem is the instruction.
+    """
+    value, reason = _identity(tmp_path, {
+        "bin/a": KEYED,
+        "formulas/f.toml": 'prompt = "run gc slack publish-to-channel at the end"\n',
+    })
+    assert value == "unknown"
+    assert "agent instructions" in reason
+    assert "carry no" not in reason
+    assert "1 scripted site(s) carry it" in reason

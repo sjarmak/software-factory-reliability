@@ -118,11 +118,26 @@ class EffectEvidence:
                 "factory itself performs this effect" % len(self.harness),
             )
         if self.instructed:
+            # Both facts go in the reason, because they ask for different work.
+            # The instructed site is why the identity is withdrawn and cannot be
+            # patched away; how the scripted sites scored is the part someone
+            # can fix this afternoon. Reporting only the first taught readers
+            # there was nothing to do.
+            if not self.scripted:
+                alongside = "no scripted site(s) alongside"
+            elif self.missing_identity:
+                alongside = "%d of %d scripted site(s) carry no %s" % (
+                    len(self.missing_identity),
+                    len(self.scripted),
+                    self.identity_name,
+                )
+            else:
+                alongside = "%d scripted site(s) carry it" % len(self.scripted)
             return (
                 "unknown",
                 "%d call site(s) are agent instructions, not code, so no static "
-                "marker can bind them (%d scripted site(s) alongside)"
-                % (len(self.instructed), len(self.scripted)),
+                "marker can bind them; %s"
+                % (len(self.instructed), alongside),
             )
         if self.missing_identity:
             return (
