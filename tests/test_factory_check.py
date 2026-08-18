@@ -944,6 +944,35 @@ def test_the_duplicate_section_is_absent_when_nothing_duplicates(tmp_path):
     assert "Effects that duplicate on a repeat" not in matrix, matrix
 
 
+def schema_enum(path, key):
+    """The enum declared for one field in one schema, found wherever it sits.
+
+    Located by walking rather than by a fixed JSON path, because the same field
+    is declared standalone in effect.schema.json and inlined several levels down
+    in factory.schema.json, and a hand-written path to each is one refactor away
+    from reading the wrong node and silently agreeing with itself. The
+    single-match assertion is the guard on that: two enums for one key means the
+    walk found something other than what the caller meant.
+    """
+    node = json.loads((ROOT / "schemas" / path).read_text())
+    found = []
+
+    def walk(obj):
+        if isinstance(obj, dict):
+            if key in obj and isinstance(obj[key], dict) and "enum" in obj[key]:
+                found.append(frozenset(obj[key]["enum"]))
+            for value in obj.values():
+                walk(value)
+        elif isinstance(obj, list):
+            for value in obj:
+                walk(value)
+
+    walk(node)
+    assert len(found) == 1, "%s: expected one %s enum, found %d" % (
+        path, key, len(found))
+    return set(found[0])
+
+
 def test_the_three_definitions_of_the_retry_grammar_agree():
     """The set of retry contracts is written down three times: once in the rule
     module, once in the standalone effect schema, once inlined in the factory
@@ -954,28 +983,8 @@ def test_the_three_definitions_of_the_retry_grammar_agree():
     "unknown" is in the schemas and deliberately out of the runtime's decided
     set -- that is what makes EFFECT-002 fire on it -- so the comparison adds it
     back rather than pretending the two sets are identical."""
-    def enum_of(path, key):
-        node = json.loads((ROOT / "schemas" / path).read_text())
-        found = []
-
-        def walk(obj):
-            if isinstance(obj, dict):
-                if key in obj and isinstance(obj[key], dict) \
-                        and "enum" in obj[key]:
-                    found.append(frozenset(obj[key]["enum"]))
-                for value in obj.values():
-                    walk(value)
-            elif isinstance(obj, list):
-                for value in obj:
-                    walk(value)
-
-        walk(node)
-        assert len(found) == 1, "%s: expected one %s enum, found %d" % (
-            path, key, len(found))
-        return set(found[0])
-
-    effect_enum = enum_of("effect.schema.json", "retry_contract")
-    factory_enum = enum_of("factory.schema.json", "retry_contract")
+    effect_enum = schema_enum("effect.schema.json", "retry_contract")
+    factory_enum = schema_enum("factory.schema.json", "retry_contract")
     expected = rules_mod.ALLOWED_RETRY_CONTRACTS | {"unknown"}
     assert effect_enum == expected, effect_enum ^ expected
     assert factory_enum == expected, factory_enum ^ expected
@@ -999,3 +1008,141 @@ def test_a_whitespace_disposition_is_not_a_disposition(tmp_path):
         ids = [line.split()[1] for line in result.stdout.splitlines()
                if line.startswith("FAIL ")]
         assert "EFFECT-005" in ids, "%s: %s" % (label, result.stdout)
+
+
+def test_the_unsound_policies_are_writable_and_fail(tmp_path):
+    """The rule that could not fire. Both schemas used to refuse assume_success
+    and assume_failure, and review validates against the schema before it runs a
+    single rule -- so EFFECT-003's unsound branch was unreachable: every
+    document carrying the value it tests for was rejected upstream. The catalog
+    listed the severity as live.
+
+    Two halves, and the second is the one that matters. The value has to reach
+    the rule (schema accepts it), and the rule has to fail it (green would be
+    worse than the refusal it replaced)."""
+    clean = ISSUE_TO_PR.read_text()
+    for policy in ("assume_success", "assume_failure"):
+        doc = tmp_path / ("policy-%s.yaml" % policy)
+        doc.write_text(clean.replace(
+            "    unknown_state_policy: block_and_escalate",
+            "    unknown_state_policy: %s" % policy))
+        out = tmp_path / policy
+        result = run_cli("review", str(doc), "--out", str(out))
+        assert "not a valid factory contract" not in result.stdout, \
+            "%s: the schema still refuses the value, so the rule cannot see it\n%s" % (
+                policy, result.stdout)
+        ids = [line.split()[1] for line in result.stdout.splitlines()
+               if line.startswith("FAIL ")]
+        assert "EFFECT-003" in ids, "%s: %s" % (policy, result.stdout)
+        # The structured path too. A finding whose printed hint talks about the
+        # policy while its path points somewhere else sends every tool built on
+        # findings.json to the wrong field.
+        findings = json.loads((out / "findings.json").read_text())
+        paths = [f["path"] for f in findings if f["rule"] == "EFFECT-003"]
+        assert paths and all(q.endswith(".unknown_state_policy") for q in paths), paths
+
+
+def test_the_two_unsound_policies_do_not_get_the_same_sentence(tmp_path):
+    """They fail for opposite reasons: one loses the effect, the other sends it
+    twice. A finding that recites both costs for whichever value it found leaves
+    the reader to work out which half applies, and the two repairs are not the
+    same repair."""
+    clean = ISSUE_TO_PR.read_text()
+    said = {}
+    for policy in ("assume_success", "assume_failure"):
+        doc = tmp_path / ("both-%s.yaml" % policy)
+        doc.write_text(clean.replace(
+            "    unknown_state_policy: block_and_escalate",
+            "    unknown_state_policy: %s" % policy))
+        out = tmp_path / ("both-" + policy)
+        run_cli("review", str(doc), "--out", str(out))
+        findings = json.loads((out / "findings.json").read_text())
+        mine = [f for f in findings if f["rule"] == "EFFECT-003"]
+        assert mine and all(f["severity"] == "FAIL" for f in mine), mine
+        said[policy] = " ".join(f["message"] for f in mine)
+    assert "loses the effect" in said["assume_success"], said["assume_success"]
+    assert "duplicat" not in said["assume_success"], said["assume_success"]
+    assert "second one" in said["assume_failure"], said["assume_failure"]
+    assert "loses the effect" not in said["assume_failure"], said["assume_failure"]
+    # Each cost has to name the branch it happens on, and they are opposite
+    # branches. An earlier draft said assume_success loses the effect when the
+    # attempt "may have landed" -- backwards, because if it landed then assuming
+    # success is right. The loss is on did-NOT-land; the duplicate is on did.
+    assert "did not land" in said["assume_success"], said["assume_success"]
+    assert "did land" in said["assume_failure"], said["assume_failure"]
+
+
+def test_the_unknown_state_policy_grammar_agrees_across_its_definitions():
+    """Same three-definitions problem as the retry contract, and this is the
+    field it already bit. The two schemas must offer the same values, and both
+    must still accept the unsound ones -- a schema that quietly drops them puts
+    EFFECT-003 back in the state where its branch cannot be reached, which is a
+    regression no other test in this file would notice."""
+    effect_enum = schema_enum("effect.schema.json", "unknown_state_policy")
+    factory_enum = schema_enum("factory.schema.json", "unknown_state_policy")
+    assert effect_enum == factory_enum, effect_enum ^ factory_enum
+    # EQUALITY, not containment. Subset assertions were the first version of
+    # this test and they let a value be added to both schemas and to nothing
+    # else -- "silently_retry" would satisfy every subset here, pass the schema,
+    # and review green, which is the exact hole the test claims to close.
+    assert effect_enum == rules_mod.ALLOWED_UNKNOWN_STATE_POLICIES, \
+        effect_enum ^ rules_mod.ALLOWED_UNKNOWN_STATE_POLICIES
+    assert rules_mod.SOUND_POLICIES.isdisjoint(rules_mod.UNSOUND_POLICIES)
+
+
+def test_an_unrecognised_policy_fails_rather_than_passing_by_default():
+    """EFFECT-003 used to fail two named bad values and let everything else
+    through, so "not one of the two we thought of" counted as sound. A value
+    added to both schemas and to nothing else -- a fork, a merge, a good idea
+    nobody finished -- would then review green while the rules had never
+    reasoned about it.
+
+    Driven through rules.review() rather than the CLI on purpose: the point is
+    what happens when a value gets PAST the schema, so a fixture the schema
+    rejects would be testing the wrong layer."""
+    doc = {"effects": [{"name": "publish", "destination": "messaging",
+                        "effect_identity": "publish_id",
+                        "retry_contract": "deduplicate",
+                        "unknown_state_policy": "silently_retry"}]}
+    findings = rules_mod.review(doc)
+    effect003 = [f for f in findings if f.rule == "EFFECT-003"]
+    assert effect003, [f.rule for f in findings]
+    assert effect003[0].severity == "FAIL", effect003[0]
+    assert "silently_retry" in effect003[0].message, effect003[0].message
+
+
+def test_the_rendered_matrix_marks_an_unsound_policy(tmp_path):
+    """render does not run the rules, and it never did -- but while the two
+    unsound values were schema-INVALID, render rejected any contract carrying
+    one and the omission was invisible. Making them writable removed that
+    accidental cover: render now exits 0 and writes every artifact.
+
+    QUICKSTART calls the matrix "the artifact you hand to a reviewer who will
+    not read YAML". A bare `assume_failure` in a cell reads to that reviewer as
+    one more decided value beside `block_and_escalate`, and the person holding
+    the printout is not the person running review."""
+    clean = ISSUE_TO_PR.read_text()
+    doc = tmp_path / "unsound.yaml"
+    doc.write_text(clean.replace(
+        "    unknown_state_policy: block_and_escalate",
+        "    unknown_state_policy: assume_failure"))
+    run_cli("render", str(doc), "--out", str(tmp_path))
+    matrix = (tmp_path / "effect-matrix.md").read_text()
+    rows = [line for line in matrix.splitlines()
+            if line.startswith("|") and "assume_failure" in line]
+    assert rows, matrix
+    assert all("UNSOUND" in row for row in rows), rows
+    assert "## Effects that resolve an ambiguous outcome by guessing" in matrix
+    priced = [line for line in matrix.splitlines()
+              if line.startswith("- ") and "assume_failure" in line]
+    assert priced, matrix
+    assert all("did land" in line for line in priced), priced
+
+
+def test_the_unsound_section_is_absent_when_every_policy_is_sound(tmp_path):
+    """The other rail. A heading that is always present stops carrying
+    information, and the example fixture is the case that must not trip it."""
+    run_cli("render", str(ISSUE_TO_PR), "--out", str(tmp_path))
+    matrix = (tmp_path / "effect-matrix.md").read_text()
+    assert "resolve an ambiguous outcome by guessing" not in matrix
+    assert "UNSOUND" not in matrix

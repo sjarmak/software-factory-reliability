@@ -43,8 +43,8 @@
       "description": "Query used to find a previously applied effect at the destination, for example find_by_head_reference. Needed whenever retry_contract is reconcile; without it the caller cannot learn whether the prior attempt landed."
     },
     "unknown_state_policy": {
-      "enum": ["block_and_escalate", "reconcile_then_block", "manual_review", "unknown"],
-      "description": "What the caller does when an attempt's outcome cannot be determined (timeout, crash after send, lost response). Every allowed policy stops and surfaces the ambiguity: block_and_escalate, reconcile_then_block, manual_review. Assuming success or assuming failure are both unsound (one loses the effect, the other duplicates it) and are schema-invalid values. \"unknown\" records indecision. Optional at the schema level so partial contracts can be recorded; the review rules treat absence as a failure finding."
+      "enum": ["block_and_escalate", "reconcile_then_block", "manual_review", "assume_success", "assume_failure", "unknown"],
+      "description": "What the caller does when an attempt's outcome cannot be determined (timeout, crash after send, lost response). Every SOUND policy stops and surfaces the ambiguity: block_and_escalate, reconcile_then_block, manual_review. Two accepted values are not sound, and the enum admits them deliberately -- see below. assume_success and assume_failure are both unsound -- one loses the effect, the other duplicates it -- and the review rules FAIL them. They are accepted values anyway, because a factory that does one of them needs to be able to say so: refusing the value does not change the behaviour, it only forces the record to read \"unknown\", which is what a builder who never looked writes. \"unknown\" records indecision. Optional at the schema level so partial contracts can be recorded; the review rules treat absence as a failure finding."
     }
   }
 }

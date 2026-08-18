@@ -30,7 +30,15 @@ class Finding:
 SAFE_ENFORCERS = {"publisher", "destination", "store"}
 SAFE_OPERATIONS = {"compare-and-set", "transactional"}
 ALLOWED_RETRY_CONTRACTS = {"deduplicate", "converge", "reconcile", "at_least_once"}
+SOUND_POLICIES = {"block_and_escalate", "reconcile_then_block", "manual_review"}
 UNSOUND_POLICIES = {"assume_success", "assume_failure"}
+# The exact vocabulary, not a floor. EFFECT-003 used to fail two named bad
+# values and pass everything else, so a value added to the schemas and to
+# nothing else -- by a fork, by a merge, by a good idea nobody finished --
+# reviewed GREEN, because "not one of the two bad ones" is not the same as
+# "one of the ones we reasoned about". Failing the unrecognised value is the
+# fail-closed direction: the cost of being wrong is a finding somebody reads.
+ALLOWED_UNKNOWN_STATE_POLICIES = SOUND_POLICIES | UNSOUND_POLICIES | {"unknown"}
 CANONICAL_PROMISES = [
     "ready_to_claim",
     "claimed_to_started",
@@ -258,9 +266,27 @@ def _check_effects(doc, work, findings):
                 f"{path}.retry_contract"))
         policy = effect.get("unknown_state_policy")
         if policy in UNSOUND_POLICIES:
+            # Both schemas ACCEPT these two, which looks like a gap and is the
+            # point. A factory that assumes failure on an ambiguous outcome does
+            # not stop doing it because the schema refused the word; the only
+            # thing refusing it changes is the record, which then has to read
+            # "unknown" -- indistinguishable from a builder who never looked.
+            # So the value is writable and this rule fails it, which is strictly
+            # more information than a validation error nobody keeps.
+            # The two costs are opposite and each has its own precondition.
+            # An earlier draft of this said assume_success loses the effect
+            # when "the attempt may have landed", which is backwards: if it
+            # landed, assuming success happens to be RIGHT. The loss is on the
+            # branch where it did NOT land and nothing goes back to check.
+            cost = ("assuming success loses the effect: if the attempt did not "
+                    "land, nothing will ever go back and check, and the work "
+                    "is silently dropped"
+                    if policy == "assume_success" else
+                    "assuming failure duplicates the effect: if the attempt "
+                    "did land, the retry sends a second one")
             findings.append(Finding(
                 "EFFECT-003", "FAIL",
-                f"Effect {name} has unknown_state_policy {policy}; assuming success loses the effect and assuming failure duplicates it.",
+                f"Effect {name} has unknown_state_policy {policy}; {cost}.",
                 "Declare block_and_escalate, reconcile_then_block, or manual_review so an ambiguous outcome stops and surfaces.",
                 f"{path}.unknown_state_policy"))
         elif not _declared(policy):
@@ -268,6 +294,12 @@ def _check_effects(doc, work, findings):
                 "EFFECT-003", "FAIL",
                 f"Effect {name} has an undecided unknown_state_policy; an ambiguous outcome will be resolved ad hoc under incident pressure.",
                 "Decide block_and_escalate, reconcile_then_block, or manual_review before the ambiguity happens.",
+                f"{path}.unknown_state_policy"))
+        elif policy not in ALLOWED_UNKNOWN_STATE_POLICIES:
+            findings.append(Finding(
+                "EFFECT-003", "FAIL",
+                f"Effect {name} has unknown_state_policy {policy!r}, which these rules do not recognise; whether it stops on an ambiguous outcome or resolves it by guessing is not something this contract establishes.",
+                "Use one of: " + ", ".join(sorted(SOUND_POLICIES)) + ". If the factory genuinely does something else, add it to the rules with its cost stated, not only to the schema.",
                 f"{path}.unknown_state_policy"))
         # at_least_once is a DECIDED value whose answer is bad, and the enum
         # had no way to say that. A destination with no dedup property leaves

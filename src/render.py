@@ -98,6 +98,26 @@ def work_lifecycle(doc):
     return "\n".join(lines) + "\n"
 
 
+def _policy_cell(policy):
+    """The unknown-state policy as it should appear to someone reading the
+    rendered report instead of the YAML.
+
+    This exists because making the two unsound policies schema-VALID -- which
+    is what lets a factory record that it assumes success -- also made `render`
+    succeed on a contract carrying one, where before the schema refused it and
+    nothing was produced. QUICKSTART calls the rendered matrix "the artifact you
+    hand to a reviewer who will not read YAML", and printing the bare token
+    `assume_failure` into a cell tells that reviewer nothing: it looks like one
+    more decided value beside `block_and_escalate`. `review` fails it loudly and
+    the person holding the printout is not running `review`.
+    """
+    if not policy:
+        return "not declared"
+    if policy in rules.UNSOUND_POLICIES:
+        return "**%s (UNSOUND)**" % policy
+    return str(policy)
+
+
 def effect_matrix(doc):
     lines = [f"# Effect matrix: {_factory_name(doc)}", ""]
     effects = _effects(doc)
@@ -123,7 +143,7 @@ def effect_matrix(doc):
             str(effect.get("effect_identity_key") or "the identity above"),
             str(effect.get("retry_contract", "not declared")),
             str(effect.get("readback") or "none"),
-            str(effect.get("unknown_state_policy") or "not declared"),
+            _policy_cell(effect.get("unknown_state_policy")),
             ", ".join(c for c in covering if c) or "none",
         ]
         lines.append("| " + " | ".join(row) + " |")
@@ -131,6 +151,21 @@ def effect_matrix(doc):
     # rather than squeezed into a cell. It is a sentence, and it is the whole
     # answer to "what does a retry cost here" -- the row above says only that a
     # repeat lands, which reads as a shrug without the bound beside it.
+    unsound = [e for e in effects
+               if isinstance(e, dict)
+               and e.get("unknown_state_policy") in rules.UNSOUND_POLICIES]
+    if unsound:
+        lines.extend(["", "## Effects that resolve an ambiguous outcome by guessing", ""])
+        for effect in unsound:
+            policy = effect.get("unknown_state_policy")
+            lines.append("- **%s** -> %s: `%s`. %s" % (
+                effect.get("name", "not declared"),
+                effect.get("destination", "not declared"),
+                policy,
+                "If the attempt did not land, nothing goes back to check and the "
+                "work is silently dropped." if policy == "assume_success" else
+                "If the attempt did land, the retry sends a second one."))
+
     duplicating = [e for e in effects
                    if isinstance(e, dict) and e.get("retry_contract") == "at_least_once"]
     if duplicating:

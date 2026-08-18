@@ -53,7 +53,7 @@ and the totals line for this contract is:
 
 Exit status is nonzero on any FAIL. Every rule id maps to a pattern page, and
 [docs/contract-reference.md](docs/contract-reference.md) is the index: what
-each of the twenty-three rules checks, which contract path it lands on, and
+each of the twenty-four rules checks, which contract path it lands on, and
 which pattern explains it. The totals are pinned by the test suite, so if your
 checkout prints different numbers, the catalog changed and this page is what
 needs updating.
