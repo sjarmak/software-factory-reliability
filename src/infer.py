@@ -40,6 +40,7 @@ inverted on the case it existed to catch.
 """
 
 import fnmatch
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -98,6 +99,18 @@ class EffectEvidence:
         """
         if not self.sites:
             return "unknown", "no call site found; the effect may not be performed here"
+        if self.identity_name in (None, "", "unknown"):
+            # A scaffolded pack leaves every identity undecided on purpose, and
+            # the branches below interpolate the identity NAME into their
+            # reason. With the name literally "unknown" they produced "1 of 1
+            # scripted call sites carry no unknown", which reads as a broken
+            # tool rather than as the question it is.
+            return (
+                "unknown",
+                "no identity is declared for this effect in the probe pack, so "
+                "there is nothing to look for at its %d call site(s)"
+                % len(self.sites),
+            )
         if not self.scripted and not self.instructed:
             return (
                 "unknown",
@@ -171,27 +184,60 @@ def _matches_any(rel, globs):
     return False
 
 
+_PRUNABLE_DIR = re.compile(r"^\*\*/([^/*]+)/\*\*$")
+
+
+def _pruned_dir_names(exclude):
+    """Directory names an exclude glob rules out wholesale.
+
+    Excluding a path only after walking into it means a scan of a repository
+    with a large store underneath it reads the whole store before discarding
+    it. On this installation that took longer than the command was willing to
+    wait, which for an adopter is indistinguishable from a hang.
+    """
+    names = {".git"}
+    for glob in exclude:
+        match = _PRUNABLE_DIR.match(glob)
+        if match:
+            names.add(match.group(1))
+    return names
+
+
 def scan_files(root, scan):
     """Yield (relative path, text, language) for every in-scope readable file."""
     root = Path(root)
     include = scan.get("include_globs") or ["**"]
     exclude = scan.get("exclude_globs") or []
     max_bytes = int(scan.get("max_file_bytes", 2_000_000))
-    for path in sorted(root.rglob("*")):
-        if not path.is_file() or path.is_symlink():
-            continue
-        rel = str(path.relative_to(root))
-        if not _matches_any(rel, include) or _matches_any(rel, exclude):
-            continue
-        try:
-            if path.stat().st_size > max_bytes:
+    pruned = _pruned_dir_names(exclude)
+    prune_nested = bool(scan.get("prune_nested_repos"))
+    for directory, subdirs, filenames in os.walk(root, followlinks=False):
+        subdirs[:] = sorted(d for d in subdirs if d not in pruned)
+        if prune_nested:
+            # A subdirectory that is itself a repository holds another
+            # project's code. Counting its call sites as this installation's
+            # is not a small overcount: on the installation this was written
+            # against, nested checkouts and worktrees turned 40-odd real push
+            # sites into 1045, which is a number nobody can act on.
+            subdirs[:] = [d for d in subdirs
+                          if not (Path(directory) / d / ".git").exists()]
+        for filename in sorted(filenames):
+            path = Path(directory) / filename
+            if not path.is_file() or path.is_symlink():
                 continue
-            text = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            # A binary or unreadable file is not evidence of absence, but it is
-            # also not a call site. Skipping is recorded by the caller's count.
-            continue
-        yield rel, text, _language_of(rel, text)
+            rel = str(path.relative_to(root))
+            if not _matches_any(rel, include) or _matches_any(rel, exclude):
+                continue
+            try:
+                if path.stat().st_size > max_bytes:
+                    continue
+                text = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                # A binary or unreadable file is not evidence of absence, but
+                # it is also not a call site. Skipping is recorded by the
+                # caller's count.
+                continue
+            yield rel, text, _language_of(rel, text)
 
 
 # Shell metacharacters that end one command and begin another. Splitting on
@@ -352,12 +398,54 @@ def probe_effect(effect_probe, files):
     for kind, matchers, path_globs in groups:
         _collect(evidence, files, kind, matchers, path_globs, markers)
 
+    evidence.sites = _resolve_overlaps(evidence.sites)
+
     harness_globs = call_site.get("harness_globs") or []
     if harness_globs:
         for site in evidence.sites:
             if site.kind == "scripted" and _matches_any(site.path, harness_globs):
                 site.kind = "harness"
     return evidence
+
+
+# Which classification wins when a file matches more than one group's
+# path_globs. Kept explicit because the alternative is whichever group the
+# loop reached last, which is a property of dictionary order rather than of
+# the installation.
+_KIND_PRECEDENCE = {"harness": 0, "instructed": 1, "scripted": 2}
+
+
+def _resolve_overlaps(sites):
+    """Keep one site per invocation.
+
+    Two independent causes, both measured on a real installation:
+
+      Within one group, "any_of" means any of these patterns matched, so an
+      invocation matching two of them was appended twice. Three of this
+      city's nudge sites were counted double for exactly that reason -- a
+      single `gc session nudge mayor "$msg"` line matching two patterns.
+
+      Across groups, collection runs per group, so a directory listed in both
+      the scripted and the instructed globs -- the normal case for a tree
+      holding code and documents side by side -- produced two sites for one
+      invocation.
+
+    Either way the population every ratio is computed over is inflated by the
+    overlap, and "20 of 23 sites carry the key" stops being a fact about the
+    installation.
+
+    Instructed beats scripted on a tie because it is the stronger claim: an
+    invocation something reads rather than runs cannot be bound by a static
+    marker, and calling it scripted asserts that it can.
+    """
+    best = {}
+    for site in sites:
+        key = (site.path, site.line)
+        current = best.get(key)
+        if current is None or (_KIND_PRECEDENCE[site.kind]
+                               < _KIND_PRECEDENCE[current.kind]):
+            best[key] = site
+    return [best[key] for key in sorted(best)]
 
 
 def _collect(evidence, files, kind, matchers, path_globs, markers):

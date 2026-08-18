@@ -437,3 +437,80 @@ def test_every_declared_effect_is_accounted_for_in_the_reconcile_counts(tmp_path
                   for part in summary.split(" (of ")[0].split(", "))
     assert counted == 1, "declared effect went unreported: " + result.stdout
     assert "OPEN" in result.stdout
+
+
+def test_an_undeclared_identity_is_reported_as_a_question_not_a_failed_search():
+    """A scaffolded pack leaves every identity undecided on purpose.
+
+    With identity.name literally "unknown", the missing-marker branch read
+    "1 of 1 scripted call sites carry no unknown" -- a sentence that describes
+    a broken tool rather than the decision it is waiting on. Flips if the
+    early return for an undeclared identity is removed.
+    """
+    site = infer.CallSite(path="bin/x", line=1, text="git push",
+                          kind="scripted", has_identity=False)
+    evidence = infer.EffectEvidence(
+        name="git_push", destination="code_host",
+        identity_name="unknown", sites=[site])
+    value, reason = evidence.derived_identity()
+    assert value == "unknown"
+    assert "no identity is declared" in reason
+    assert "carry no unknown" not in reason
+
+
+def test_a_file_in_two_groups_is_counted_once(tmp_path):
+    """Overlapping path_globs must not double-count an invocation.
+
+    A tree holding code and documents side by side is the normal case, and
+    listing it in both groups produced two sites for one call: the population
+    every ratio is computed over was inflated by exactly the overlap.
+
+    Flips if _resolve_overlaps is removed: len(sites) becomes 2.
+    """
+    root = tmp_path / "install"
+    (root / "svc").mkdir(parents=True)
+    (root / "svc" / "notes.md").write_text("Run `gc slack publish-to-channel` when done.\\n")
+    probe = {
+        "name": "slack_publish",
+        "destination": "messaging",
+        "call_site": {
+            "scripted": {"path_globs": ["svc/**/*"],
+                         "any_of": [{"regex": "publish-to-channel"}]},
+            "instructed": {"path_globs": ["svc/**/*.md"],
+                           "any_of": [{"regex": "publish-to-channel"}]},
+        },
+        "identity": {"name": "idempotency_key", "markers": ["--idempotency-key"]},
+    }
+    files = list(infer.scan_files(root, {"include_globs": ["**"]}))
+    evidence = infer.probe_effect(probe, files)
+    assert len(evidence.sites) == 1, [s.kind for s in evidence.sites]
+    # And it is the instructed reading that survives: a command in a document
+    # is read, not run, so no static marker could bind it.
+    assert evidence.sites[0].kind == "instructed"
+
+
+def test_one_invocation_matching_two_patterns_is_one_site(tmp_path):
+    """"any_of" means any matched, not each that matched.
+
+    Measured on a real installation: three nudge call sites were counted
+    twice because a single `gc session nudge mayor "$msg"` line matched two
+    of the group's patterns. Flips if _resolve_overlaps is removed.
+    """
+    root = tmp_path / "install"
+    (root / "bin").mkdir(parents=True)
+    (root / "bin" / "surfacer").write_text('#!/bin/sh\ngc session nudge mayor "$msg"\n')
+    probe = {
+        "name": "nudge",
+        "destination": "agent",
+        "call_site": {
+            "scripted": {
+                "path_globs": ["bin/*"],
+                "any_of": [{"regex": r"gc session nudge"},
+                           {"regex": r"\bnudge\b"}],
+            },
+        },
+        "identity": {"name": "nudge_id", "markers": ["--nudge-id"]},
+    }
+    files = list(infer.scan_files(root, {"include_globs": ["**"]}))
+    evidence = infer.probe_effect(probe, files)
+    assert len(evidence.sites) == 1, [(s.path, s.line) for s in evidence.sites]

@@ -7,6 +7,7 @@ Subcommands:
   review     run the semantic rule catalog over one contract
   render     produce diagrams and tables from one contract
   infer      derive a contract from a real installation, with call-site evidence
+  probes-init  scaffold a probe pack by reading an installation
   reconcile  compare a hand-written contract against what the installation shows
 
 Schemas are located relative to this script, not the working directory.
@@ -22,7 +23,8 @@ from jsonschema import Draft202012Validator, FormatChecker
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
-import infer as infer_mod  # noqa: E402
+import infer as infer_mod
+import probe_scaffold as scaffold_mod  # noqa: E402
 import render as render_mod  # noqa: E402
 import rules as rules_mod  # noqa: E402
 
@@ -305,6 +307,59 @@ def cmd_infer(args):
     return 0
 
 
+def cmd_probes_init(args):
+    """Scaffold a probe pack by reading an installation.
+
+    The gap this closes is the one that makes the kit unusable by anyone who
+    did not write it: every command downstream needs a probe pack, and writing
+    one from a blank page requires knowing both this file format and every
+    place your own factory reaches outside itself.
+    """
+    excludes = list(scaffold_mod._DEFAULT_EXCLUDES)
+    excludes.extend("**/%s/**" % e.strip("/") for e in (args.exclude or []))
+    scan = {
+        "include_globs": ["**"],
+        "exclude_globs": excludes,
+        "prune_nested_repos": not args.include_nested_repos,
+    }
+    found, scanned = scaffold_mod.survey(args.installation, scan)
+    if not found:
+        print("read %d file(s) and found no call sites from the built-in "
+              "catalog." % scanned)
+        print("That is a finding, not a success: either this installation "
+              "performs no external effects,")
+        print("or it performs them in a way the catalog does not know. Check "
+              "the second before believing the first.")
+        return 1
+
+    print("read %d file(s); found %d effect class(es)" % (scanned, len(found)))
+    for name, item in found.items():
+        print("  %-22s %4d call site(s) in %3d file(s)"
+              % (name, item["total"], len(item["paths"])))
+
+    print("")
+    print("call sites by top-level directory:")
+    for top, hits in scaffold_mod.directory_distribution(found)[:12]:
+        print("  %-24s %4d" % (top, hits))
+    print("")
+    print("Directories your factory WRITES (state, logs, generated reports) "
+          "will show up here")
+    print("alongside the ones it RUNS, and the same command is a call site in "
+          "one and a")
+    print("description of one in the other. Re-run with --exclude <dir> for "
+          "each that is output.")
+
+    target = Path(args.write)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(scaffold_mod.render(args.installation, found, scanned))
+    print("")
+    print("wrote %s" % target)
+    print("Every identity in it reads unknown, so `infer` will withdraw all of "
+          "them until you")
+    print("decide each one. That is the intended starting state, not an error.")
+    return 0
+
+
 def cmd_reconcile(args):
     """Report every place the declaration claims more than the installation shows.
 
@@ -436,6 +491,19 @@ def main(argv=None):
                          help="path for the derived contract "
                               "(default: <out>/factory.derived.yaml)")
     p_infer.set_defaults(func=cmd_infer)
+
+    p_pinit = sub.add_parser(
+        "probes-init",
+        help="scaffold a probe pack by reading an installation")
+    p_pinit.add_argument("installation", help="root directory of the installation")
+    p_pinit.add_argument("--write", default="probes.yaml",
+                         help="path for the generated probe pack")
+    p_pinit.add_argument("--exclude", action="append", default=[],
+                         help="directory name to skip; repeatable")
+    p_pinit.add_argument("--include-nested-repos", action="store_true",
+                         help="do not skip subdirectories that are themselves "
+                              "git repositories")
+    p_pinit.set_defaults(func=cmd_probes_init)
 
     p_recon = sub.add_parser(
         "reconcile",
