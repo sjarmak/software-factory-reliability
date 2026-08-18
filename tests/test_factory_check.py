@@ -527,3 +527,119 @@ def test_recon001_reports_once_per_destination_not_once_per_effect():
     code_host = next(f for f in recon if "code_host" in f.message)
     for name in ("push", "open_pr", "merge_pr"):
         assert name in code_host.message, "the message should name every affected effect"
+
+
+RECONCILE_PROBES = """\
+version: factory.probes/v1
+name: lanes
+factory_name: lanes
+scan:
+  include_globs: ["bin/*", "formulas/*.toml"]
+effects:
+  - name: slack_publish
+    destination: messaging
+    call_site:
+      scripted:
+        path_globs: ["bin/*"]
+        any_of:
+          - regex: 'slack_post'
+      instructed:
+        path_globs: ["formulas/*.toml"]
+        any_of:
+          - regex: 'slack_post'
+    identity:
+      name: idempotency_key
+      markers: ["--idempotency-key"]
+  - name: merge_pull_request
+    destination: code_host
+    call_site:
+      scripted:
+        path_globs: ["bin/*"]
+        any_of:
+          - regex: 'gh pr merge'
+      instructed:
+        path_globs: ["formulas/*.toml"]
+        any_of:
+          - regex: 'gh pr merge'
+    identity:
+      name: pr_head_sha
+      markers: ["--match-head-commit"]
+"""
+
+RECONCILE_CONTRACT = """\
+version: factory.reliability/v1
+factory:
+  name: lanes
+effects:
+  - name: slack_publish
+    destination: messaging
+    effect_identity: idempotency_key
+    retry_contract: deduplicate
+    unknown_state_policy: block_and_escalate
+  - name: merge_pull_request
+    destination: code_host
+    effect_identity: pr_head_sha
+    retry_contract: converge
+    unknown_state_policy: block_and_escalate
+"""
+
+
+def _lanes_install(tmp_path):
+    """An installation with one effect done in code and one only by agents."""
+    root = tmp_path / "install"
+    (root / "bin").mkdir(parents=True)
+    (root / "formulas").mkdir(parents=True)
+    (root / "bin" / "publish").write_text(
+        "#!/usr/bin/env bash\nslack_post --idempotency-key \"$KEY\" \"$MSG\"\n")
+    # Both effects are ALSO named in agent instructions, which is the normal
+    # shape of an agent-driven factory and the case that used to collapse every
+    # verdict into one.
+    (root / "formulas" / "ship.toml").write_text(
+        'prompt = """\nPost with slack_post, then run gh pr merge on the PR.\n"""\n')
+    contract = tmp_path / "factory.yaml"
+    contract.write_text(RECONCILE_CONTRACT)
+    probes = tmp_path / "probes.yaml"
+    probes.write_text(RECONCILE_PROBES)
+    return contract, probes, root
+
+
+def test_reconcile_confirms_the_code_lane_and_still_prints_the_residual(tmp_path):
+    """An instructed site must not erase a code lane that carries the identity.
+
+    Before this, derived_identity's strict rule (any instructed site withdraws
+    the identity) was applied to reconciliation too, so on any agent-driven
+    factory every declared effect read DRIFT and `confirmed` was unreachable --
+    a uniform answer across inputs that must differ. The residual travels with
+    the confirmation, so nobody reads it as a static guarantee.
+    """
+    contract, probes, root = _lanes_install(tmp_path)
+    out = run_cli("reconcile", str(contract), str(root), "--probes", str(probes))
+    line = [l for l in out.stdout.splitlines() if l.startswith("CONFIRMED  slack_publish")]
+    assert line, out.stdout
+    assert "all 1 code call site(s) carry it" in line[0]
+    assert "1 further call site(s) are agent instructions" in line[0]
+
+
+def test_reconcile_calls_an_agents_only_effect_unverified_not_drift(tmp_path):
+    """No code performing the effect is a different problem from code that
+    performs it without the identity, and it needs a different fix."""
+    contract, probes, root = _lanes_install(tmp_path)
+    out = run_cli("reconcile", str(contract), str(root), "--probes", str(probes))
+    line = [l for l in out.stdout.splitlines()
+            if l.startswith("UNVERIFIED  merge_pull_request")]
+    assert line, out.stdout
+    assert "no code performs this effect" in line[0]
+    assert not [l for l in out.stdout.splitlines() if l.startswith("DRIFT  merge_pull_request")]
+
+
+def test_reconcile_still_reports_drift_when_the_code_lane_misses_the_identity(tmp_path):
+    """The confirmation rail must be able to go red: the same installation with
+    the identity marker removed from the one code site."""
+    contract, probes, root = _lanes_install(tmp_path)
+    (root / "bin" / "publish").write_text(
+        "#!/usr/bin/env bash\nslack_post \"$MSG\"\n")
+    out = run_cli("reconcile", str(contract), str(root), "--probes", str(probes))
+    line = [l for l in out.stdout.splitlines() if l.startswith("DRIFT  slack_publish")]
+    assert line, out.stdout
+    assert "1 of 1 code call site(s) carry no idempotency_key" in line[0]
+    assert out.returncode == 1

@@ -360,6 +360,20 @@ def cmd_probes_init(args):
     return 0
 
 
+def _with_residual(reason, residual):
+    """Never report a code-lane confirmation without its unbindable residual.
+
+    A confirmation that omits the instructed sites is a claim of a static
+    guarantee that does not exist: no edit to the code binds a sentence in a
+    prompt. The count travels with the confirmation so the reader cannot get
+    one without the other.
+    """
+    if not residual:
+        return reason
+    return ("%s; %d further call site(s) are agent instructions and no static "
+            "marker can bind them" % (reason, residual))
+
+
 def cmd_reconcile(args):
     """Report every place the declaration claims more than the installation shows.
 
@@ -390,6 +404,16 @@ def cmd_reconcile(args):
                 (name, "no probe covers this effect; the derivation is blind to it"))
             continue
         derived, reason = item.derived_identity()
+        # The reconciler asks a different question from the validator. The
+        # validator asks whether the effect can be statically guaranteed;
+        # derived_identity answers that, and answers "unknown" whenever one
+        # agent-instruction site exists. The reconciler asks whether the
+        # DECLARATION matches the installation, and folding those together made
+        # every declared identity read as drift on an agent-driven factory --
+        # five effects in five different situations, one verdict. The code lane
+        # is compared here; the unbindable residual is carried alongside it and
+        # printed, never dropped.
+        code_derived, code_reason, residual = item.code_lane_identity()
         if claimed in (None, "unknown"):
             if derived != "unknown":
                 unverifiable.append(
@@ -402,17 +426,25 @@ def cmd_reconcile(args):
                 # left open from one the report simply never reached.
                 open_items.append((name, reason))
             continue
-        if derived == "unknown":
-            drift.append((name, claimed, reason))
-        elif claimed != derived:
+        if code_derived == "unknown":
+            if not (item.scripted or item.fenced) and residual:
+                # No code performs the effect at all: every site is an agent
+                # instruction. That is not the contract claiming more than the
+                # installation shows, it is the installation putting the effect
+                # somewhere no scan can reach -- a different problem, needing a
+                # different fix, and it read as drift.
+                unverifiable.append((name, code_reason))
+            else:
+                drift.append((name, claimed, code_reason))
+        elif claimed != code_derived:
             # Two decided values that disagree is the sharpest drift there is:
             # the contract names an identity the call sites do not carry, and
             # without this branch it read as confirmed.
             drift.append(
                 (name, claimed,
-                 "call sites carry %s, not %s" % (derived, claimed)))
+                 "call sites carry %s, not %s" % (code_derived, claimed)))
         else:
-            confirmed.append((name, claimed, reason))
+            confirmed.append((name, claimed, _with_residual(code_reason, residual)))
 
     # Effects the installation performs and the contract never mentions are
     # kept OUT of the drift bucket. Folding them in inflated drift past the

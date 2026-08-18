@@ -169,6 +169,61 @@ class EffectEvidence:
             % (len(bindable), self._through_a_fence()),
         )
 
+    def code_lane_identity(self):
+        """Whether the CODE that performs this effect carries the identity.
+
+        derived_identity() answers a stricter question -- can this effect be
+        statically GUARANTEED -- and correctly answers "unknown" the moment one
+        agent-instruction site exists, because no edit to the scripted sites can
+        bind a sentence in a prompt.
+
+        That strictness has a cost the reconciler was paying in full. Every
+        effect in an agent-driven factory has instructed sites; on the city this
+        kit was written against, all five declared effects do. So the strict
+        answer was "unknown" for all five, every declared identity read as
+        DRIFT, and `confirmed` was not merely empty but unreachable -- the same
+        uniform answer across inputs that must differ, which is the shape of a
+        broken instrument rather than a bad installation.
+
+        This separates the two questions. Returns (value, reason, residual),
+        where residual is the number of instructed sites that remain unbindable
+        whatever the code does. A caller that hides the residual is back to
+        claiming a guarantee nobody has.
+        """
+        residual = len(self.instructed)
+        bindable = self.scripted + self.fenced
+        if self.identity_name in (None, "", "unknown"):
+            return "unknown", "no identity is declared for this effect", residual
+        if not bindable:
+            if residual:
+                return (
+                    "unknown",
+                    "no code performs this effect; all %d call site(s) are agent "
+                    "instructions" % residual,
+                    residual,
+                )
+            if self.harness:
+                return (
+                    "unknown",
+                    "the only %d call site(s) are harness code" % len(self.harness),
+                    residual,
+                )
+            return "unknown", "no call site found", residual
+        if self.missing_identity:
+            return (
+                "unknown",
+                "%d of %d code call site(s) carry no %s%s"
+                % (len(self.missing_identity), len(bindable), self.identity_name,
+                   self._through_a_fence()),
+                residual,
+            )
+        return (
+            self.identity_name,
+            "all %d code call site(s) carry it%s"
+            % (len(bindable), self._through_a_fence()),
+            residual,
+        )
+
     def _through_a_fence(self):
         """Name the fenced share, so a reader can tell WHERE the identity is.
 
