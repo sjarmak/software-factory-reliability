@@ -1,0 +1,180 @@
+# Probe pack: a Gas City style installation, where effects are performed both
+# by scripts calling a CLI and by agents following written instructions.
+#
+# A probe establishes two things and refuses to guess at a third. It finds
+# every call site for a class of external effect, and it tests whether each
+# scripted site carries a stable effect identity. It does not decide how the
+# destination behaves on a repeat: that is a property of the destination.
+#
+# Two kinds of call site, kept apart on purpose:
+#
+#   scripted    a line of code. A static check can bind it, and a missing
+#               identity is a defect someone can fix by editing the line.
+#   instructed  a sentence in a formula or a prompt telling an agent to perform
+#               the effect. There is no argument list until an agent writes one
+#               at run time, so no static marker can bind it. An effect with any
+#               instructed site has no derivable identity, whatever its scripted
+#               sites look like.
+#
+# Add an effect here when the installation gains one. An effect performed by the
+# installation and absent from this file is invisible to the derivation, which
+# is the same failure as an undeclared effect in a hand-written contract, one
+# layer earlier.
+
+version: factory.probes/v1
+name: gc-shell-city
+factory_name: gas-city-ds-research
+
+# Paths whose call sites are harness code: tests and checkers that exercise the
+# verb rather than performing the effect for the factory. Declared, not guessed
+# from a filename. They are subtracted from the identity derivation and printed
+# every run.
+harness_globs: &harness_globs
+  - "bin/*.test"
+  - "bin/*.test.sh"
+  - "bin/test_*.py"
+  - "bin/*_test.py"
+  - "bin/*-test"
+
+scan:
+  include_globs:
+    - "bin/*"
+    - "bin/**/*"
+    - "hooks/*"
+    - "hooks/**/*"
+    - "assets/scripts/*"
+    - "assets/scripts/**/*"
+    - "orders/*.toml"
+    - "formulas/*.toml"
+    - "prompts/*.md"
+    - "agents/**/*.md"
+  exclude_globs:
+    - "**/testdata/**"
+    - "**/.git/**"
+
+effects:
+  - name: slack_publish
+    destination: messaging
+    call_site:
+      harness_globs: *harness_globs
+      scripted:
+        path_globs: ["bin/*", "bin/**/*", "hooks/**/*", "assets/scripts/**/*"]
+        any_of:
+          # Unanchored so a wrapped invocation is caught. Restricted to shell
+          # because unanchored it also matches the verb quoted in a Python
+          # docstring, which is a mention and not a call.
+          - regex: 'gc slack publish-to-channel'
+            languages: [shell, unknown]
+            not_regex: ['--help']
+          - regex: '["'']publish-to-channel["'']'
+            languages: [python]
+            # A string compared against, and a --help probe, are both mentions.
+            not_regex: ['==', 'assert', '--help', 'startswith', ' in ']
+            # A quoted verb inside a dict or a constant table is a
+            # declaration, not a call, and the two are told apart by what
+            # follows the verb: an argv element is followed by a comma or a
+            # closing bracket, a dict key by a colon.
+            #
+            # Requiring a visible runner instead (subprocess, Popen) was tried
+            # and is wrong: four real call sites here build argv into a
+            # variable and run it elsewhere, so that rule dropped them. A
+            # dropped unkeyed call site is a confirmed identity that should
+            # have been withdrawn, which is the failure direction that matters.
+            #
+            # The suffix class carries ")" as well as "," and "]": a tuple argv
+            # is as real as a list one, and omitting it missed the tuple form
+            # silently. A constant table (SUPPORTED = ["publish-to-channel"])
+            # still matches and is counted as an unkeyed site. That is left
+            # deliberately: it withdraws an identity that might have held,
+            # which is the direction this tool is allowed to be wrong in.
+            # Exclude a specific table with not_regex if one appears.
+            require_regex: '["'']publish-to-channel["'']\s*[,\])]'
+      instructed:
+        path_globs: ["formulas/*.toml", "prompts/*.md", "agents/**/*.md"]
+        any_of:
+          - regex: 'gc slack publish-to-channel'
+    identity:
+      name: idempotency_key
+      markers: ["--idempotency-key", "idempotency_key"]
+
+  - name: git_push
+    destination: code_host
+    call_site:
+      harness_globs: *harness_globs
+      scripted:
+        path_globs: ["bin/*", "bin/**/*", "hooks/**/*", "assets/scripts/**/*"]
+        any_of:
+          - regex: '\bgit\b[^|;&]*\bpush\b'
+            languages: [shell, unknown]
+            # --dry-run mutates nothing. A push to a scratch path inside a test
+            # harness is still a push, and is left in deliberately: a harness
+            # that pushes is a harness that can push to the wrong place.
+            not_regex: ['--dry-run', 'git push --help']
+      instructed:
+        path_globs: ["formulas/*.toml", "prompts/*.md", "agents/**/*.md"]
+        any_of:
+          - regex: '\bgit push\b'
+    identity:
+      # A push is identified by the exact remote ref it expects to replace.
+      # Without that, a repeat is a blind overwrite rather than a repeat.
+      name: expected_remote_ref
+      markers: ["--force-with-lease=", "--force-with-lease "]
+
+  - name: open_pull_request
+    destination: code_host
+    call_site:
+      harness_globs: *harness_globs
+      scripted:
+        path_globs: ["bin/*", "bin/**/*", "hooks/**/*", "assets/scripts/**/*"]
+        any_of:
+          - regex: 'gh pr create'
+            languages: [shell, unknown]
+      instructed:
+        path_globs: ["formulas/*.toml", "prompts/*.md", "agents/**/*.md"]
+        any_of:
+          - regex: 'gh pr create'
+    identity:
+      # GitHub deduplicates by head branch: a second create against the same
+      # head fails rather than opening a duplicate. A call site that names its
+      # head explicitly is asking for that guarantee.
+      name: head_branch
+      markers: ["--head", "-H "]
+
+  - name: merge_pull_request
+    destination: code_host
+    call_site:
+      harness_globs: *harness_globs
+      scripted:
+        path_globs: ["bin/*", "bin/**/*", "hooks/**/*", "assets/scripts/**/*"]
+        any_of:
+          - regex: 'gh pr merge'
+            languages: [shell, unknown]
+      instructed:
+        path_globs: ["formulas/*.toml", "prompts/*.md", "agents/**/*.md"]
+        any_of:
+          - regex: 'gh pr merge'
+    identity:
+      name: pr_head_sha
+      markers: ["--match-head-commit", "--sha"]
+
+  - name: agent_mail_nudge
+    destination: messaging
+    call_site:
+      harness_globs: *harness_globs
+      scripted:
+        path_globs: ["bin/*", "bin/**/*", "hooks/**/*", "assets/scripts/**/*"]
+        any_of:
+          - regex: 'gc (session )?nudge\b'
+            languages: [shell, unknown]
+            # "nudge poll" and "nudge drain" read and consume the queue; they
+            # send nothing. Folding them into the population produced a count
+            # of 113 for what is a far smaller number of actual sends.
+            not_regex: ['nudge poll', 'nudge drain', 'nudge list', '--help']
+      instructed:
+        path_globs: ["formulas/*.toml", "prompts/*.md", "agents/**/*.md"]
+        any_of:
+          - regex: 'gc (session )?nudge\b'
+            not_regex: ['nudge poll', 'nudge drain', 'nudge list']
+    identity:
+      name: nudge_id
+      markers: ["--id", "--nudge-id", "nudge_id"]

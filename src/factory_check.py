@@ -2,10 +2,12 @@
 """factory-check: validate, review, and render factory reliability contracts.
 
 Subcommands:
-  init      write a commented starter factory.yaml
-  validate  schema-validate contract, guarantee, campaign, and manifest files
-  review    run the semantic rule catalog over one contract
-  render    produce diagrams and tables from one contract
+  init       write a commented starter factory.yaml
+  validate   schema-validate contract, guarantee, campaign, and manifest files
+  review     run the semantic rule catalog over one contract
+  render     produce diagrams and tables from one contract
+  infer      derive a contract from a real installation, with call-site evidence
+  reconcile  compare a hand-written contract against what the installation shows
 
 Schemas are located relative to this script, not the working directory.
 """
@@ -20,6 +22,7 @@ from jsonschema import Draft202012Validator, FormatChecker
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
+import infer as infer_mod  # noqa: E402
 import render as render_mod  # noqa: E402
 import rules as rules_mod  # noqa: E402
 
@@ -214,6 +217,183 @@ def cmd_review(args):
     return 0
 
 
+def _derive(args):
+    probes = infer_mod.load_probes(args.probes)
+    return infer_mod.derive(args.installation, probes)
+
+
+def _emit_derived_yaml(contract, evidence):
+    """Render the derived contract with its provenance as YAML comments.
+
+    Provenance cannot live in the document body: the effect schema sets
+    additionalProperties false, and a generated file that fails validation is
+    worse than no generated file. Comments carry it, and out/evidence.json
+    carries it in a form a script can read.
+    """
+    lines = [
+        "# Derived by factory-check infer. Do not hand-edit: rerun the command.",
+        "#",
+        "# Every value below was read off the installation. A value that reads",
+        "# unknown was looked for and not established, and the reason is on the",
+        "# line above it. Editing an unknown to a decided value here changes the",
+        "# score and changes nothing about the installation, which is the exact",
+        "# move factory-check reconcile exists to catch.",
+        "",
+        "version: factory.reliability/v1",
+        "",
+        "factory:",
+        "  name: %s" % contract["factory"]["name"],
+        "",
+        "effects:",
+    ]
+    by_name = {e.name: e for e in evidence}
+    for effect in contract["effects"]:
+        item = by_name.get(effect["name"])
+        lines.append("  # %s" % effect.pop("_reason"))
+        if item is not None and item.sites:
+            shown = item.sites[:3]
+            for site in shown:
+                lines.append("  #   %s:%d" % (site.path, site.line))
+            if len(item.sites) > len(shown):
+                lines.append("  #   ... %d more call sites"
+                             % (len(item.sites) - len(shown)))
+        lines.append("  - name: %s" % effect["name"])
+        lines.append("    destination: %s" % effect["destination"])
+        lines.append("    effect_identity: %s" % effect["effect_identity"])
+        lines.append("    # not derivable from call sites: how the destination"
+                     " behaves on a repeat")
+        lines.append("    retry_contract: %s" % effect["retry_contract"])
+        lines.append("    # not derivable from call sites: a decision, not code")
+        lines.append("    unknown_state_policy: %s" % effect["unknown_state_policy"])
+    return "\n".join(lines) + "\n"
+
+
+def cmd_infer(args):
+    contract, evidence = _derive(args)
+    out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    total = sum(len(e.sites) for e in evidence)
+    print("scanned %d files, found %d call site(s) across %d effect(s)"
+          % (contract.pop("_scanned_files"), total, len(evidence)))
+    for item in evidence:
+        value, reason = item.derived_identity()
+        mark = "ok  " if value != "unknown" else "MISS"
+        print("  %s %-22s %2d site(s), identity %s (%s)"
+              % (mark, item.name, len(item.sites), value, reason))
+        for site in item.missing_identity:
+            print("         no %s: %s:%d" % (item.identity_name, site.path, site.line))
+
+    evidence_path = out_dir / "evidence.json"
+    evidence_path.write_text(json.dumps(
+        [
+            {
+                "effect": e.name,
+                "destination": e.destination,
+                "identity_name": e.identity_name,
+                "derived_identity": e.derived_identity()[0],
+                "reason": e.derived_identity()[1],
+                "sites": [vars(s) for s in e.sites],
+            }
+            for e in evidence
+        ], indent=2) + "\n")
+    print("wrote %s" % evidence_path)
+
+    target = Path(args.write) if args.write else out_dir / "factory.derived.yaml"
+    target.write_text(_emit_derived_yaml(contract, evidence))
+    print("wrote %s" % target)
+    return 0
+
+
+def cmd_reconcile(args):
+    """Report every place the declaration claims more than the installation shows.
+
+    This is the rule that makes the derivation load-bearing. A hand-written
+    contract may legitimately declare things no scan can see, and those are
+    reported as unverifiable rather than as drift. What it may not do is
+    declare an effect identity the call sites do not carry.
+    """
+    declared_doc = _load_valid_contract(args.file)
+    if declared_doc is None:
+        return 2
+    _, evidence = _derive(args)
+    by_name = {e.name: e for e in evidence}
+
+    declared_effects = declared_doc.get("effects") or []
+    drift = []
+    unverifiable = []
+    confirmed = []
+    open_items = []
+    for effect in declared_effects:
+        if not isinstance(effect, dict):
+            continue
+        name = effect.get("name")
+        item = by_name.get(name)
+        claimed = effect.get("effect_identity")
+        if item is None:
+            unverifiable.append(
+                (name, "no probe covers this effect; the derivation is blind to it"))
+            continue
+        derived, reason = item.derived_identity()
+        if claimed in (None, "unknown"):
+            if derived != "unknown":
+                unverifiable.append(
+                    (name, "installation supports effect_identity %s but the "
+                           "contract leaves it unknown" % derived))
+            else:
+                # Undecided on both sides. Reporting nothing here made the
+                # counts silently smaller than the number of declared effects,
+                # so a reader could not tell an effect that was checked and
+                # left open from one the report simply never reached.
+                open_items.append((name, reason))
+            continue
+        if derived == "unknown":
+            drift.append((name, claimed, reason))
+        elif claimed != derived:
+            # Two decided values that disagree is the sharpest drift there is:
+            # the contract names an identity the call sites do not carry, and
+            # without this branch it read as confirmed.
+            drift.append(
+                (name, claimed,
+                 "call sites carry %s, not %s" % (derived, claimed)))
+        else:
+            confirmed.append((name, claimed, reason))
+
+    # Effects the installation performs and the contract never mentions are
+    # kept OUT of the drift bucket. Folding them in inflated drift past the
+    # number of declared effects, which broke the accounting the summary
+    # promises: the four buckets are a partition of what was DECLARED, and an
+    # undeclared effect is by definition not in that set.
+    probed_names = {e.name for e in evidence}
+    undeclared = []
+    for name in sorted(
+            probed_names
+            - {e.get("name") for e in declared_effects if isinstance(e, dict)}):
+        item = by_name[name]
+        if item.sites:
+            undeclared.append(
+                (name, "%d call site(s) found in the installation, and the "
+                       "contract does not mention it" % len(item.sites)))
+
+    for name, claimed, reason in drift:
+        print("DRIFT  %s: contract says effect_identity %s; installation says %s"
+              % (name, claimed, reason))
+    for name, note in unverifiable:
+        print("UNVERIFIED  %s: %s" % (name, note))
+    for name, claimed, reason in confirmed:
+        print("CONFIRMED  %s: effect_identity %s, %s" % (name, claimed, reason))
+    for name, reason in open_items:
+        print("OPEN  %s: undecided in the contract and %s" % (name, reason))
+    for name, reason in undeclared:
+        print("UNDECLARED  %s: %s" % (name, reason))
+    print("%d drift, %d unverified, %d confirmed, %d open (of %d declared)"
+          % (len(drift), len(unverifiable), len(confirmed), len(open_items),
+             len([e for e in declared_effects if isinstance(e, dict)])))
+    if undeclared:
+        print("%d effect(s) performed but never declared" % len(undeclared))
+    return 1 if drift or undeclared else 0
+
+
 def cmd_render(args):
     doc = _load_valid_contract(args.file)
     if doc is None:
@@ -246,6 +426,24 @@ def main(argv=None):
                           help="exit nonzero on WARN findings as well as FAIL")
     p_review.add_argument("--out", default="out", help="directory for findings.json")
     p_review.set_defaults(func=cmd_review)
+
+    p_infer = sub.add_parser(
+        "infer", help="derive a contract from a real installation")
+    p_infer.add_argument("installation", help="root directory of the installation")
+    p_infer.add_argument("--probes", required=True, help="probe pack YAML")
+    p_infer.add_argument("--out", default="out", help="directory for evidence.json")
+    p_infer.add_argument("--write", default=None,
+                         help="path for the derived contract "
+                              "(default: <out>/factory.derived.yaml)")
+    p_infer.set_defaults(func=cmd_infer)
+
+    p_recon = sub.add_parser(
+        "reconcile",
+        help="compare a hand-written contract against the installation")
+    p_recon.add_argument("file", help="hand-written factory contract")
+    p_recon.add_argument("installation", help="root directory of the installation")
+    p_recon.add_argument("--probes", required=True, help="probe pack YAML")
+    p_recon.set_defaults(func=cmd_reconcile)
 
     p_render = sub.add_parser("render", help="render diagrams and tables")
     p_render.add_argument("file", help="factory contract to render")
