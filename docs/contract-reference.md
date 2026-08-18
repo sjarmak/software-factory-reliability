@@ -29,7 +29,7 @@ valid and fail eleven rules; the deliberately unsafe example in
 | `authorities` | no | which system is authoritative for facts, procedure, policy, and effects | `AUTH-000` |
 | `work` | no | the three identity classes, the ownership generation, the lease, and the fence | `IDENT-001`, `AUTH-001`, `AUTH-002` |
 | `artifacts` | no | artifact identity, verification binding, and publication conditions | `VERIFY-001` to `VERIFY-005` |
-| `effects` | no | one entry per class of external mutation, with its identity, retry contract, and unknown-state policy | `EFFECT-000` to `EFFECT-005`, `IDENT-002` |
+| `effects` | no | one entry per class of external mutation, with its identity, retry contract, and unknown-state policy | `EFFECT-000` to `EFFECT-006`, `IDENT-002` |
 | `reconciliation` | no | the level-triggered loops that reread external truth | `RECON-001`, `RECON-002` |
 | `scheduling` | no | how execution capacity is partitioned and made fair | `FLEET-001` to `FLEET-003` |
 | `code_estate` | no | how the factory names the code it operates on (repository plus revision) | `CODE-000` |
@@ -43,7 +43,7 @@ an incident review.
 
 ## Rule catalog
 
-Twenty-four rules. FAIL means the contract describes a system with an open
+Twenty-five rules. FAIL means the contract describes a system with an open
 failure boundary. WARN means the contract leaves something undecided that will
 be decided under pressure later.
 
@@ -77,6 +77,7 @@ and only `compare-and-set` or `transactional` as an operation.
 | `EFFECT-003` | FAIL | an effect's `unknown_state_policy` is undecided, `assume_success`, or `assume_failure`; one loses the effect and the other duplicates it | [explicit-unknown-state](../patterns/explicit-unknown-state.md) |
 | `EFFECT-004` | WARN | an effect declares `retry_contract: reconcile` with no readback query, so a retry cannot ask the destination whether the prior attempt landed | [durable-intent](../patterns/durable-intent.md) |
 | `EFFECT-005` | FAIL | an effect declares `retry_contract: at_least_once` with no `duplicate_disposition`, so a repeat is known to land as a second copy and nothing states what that costs | [effect-identity](../patterns/effect-identity.md) |
+| `EFFECT-006` | WARN | an effect declares an identity while some of its call sites are agent instructions rather than code, so the identity is enforced where code performs the effect and unenforceable where an agent does | [effect-identity](../patterns/effect-identity.md) |
 
 Accepted `retry_contract` values are `deduplicate`, `converge`, `reconcile`,
 and `at_least_once`. The `unknown_state_policy` vocabulary is six values and

@@ -313,6 +313,25 @@ def _check_effects(doc, work, findings):
                 f"Effect {name} declares retry_contract at_least_once and does not say what a duplicate costs; a repeat reaches the destination and nothing here states whether that is acceptable.",
                 "Declare duplicate_disposition: what a second copy does at the destination, and what bounds it.",
                 f"{path}.duplicate_disposition"))
+        # An identity that only the CODE carries. This fires on the honest
+        # record the derivation now produces, and it exists so that record
+        # cannot be read as a clean bill of health.
+        #
+        # A marker cannot bind a sentence. When some call sites are prose telling
+        # an agent to run the command, the identity is enforced wherever the code
+        # performs the effect and unenforceable wherever the agent does, and no
+        # amount of editing the scripted sites closes that. WARN rather than FAIL
+        # because the declaration is TRUE -- the code really does carry it -- and
+        # because the remedy is usually to move the effect behind a script, which
+        # is a design change, not a correction to the contract.
+        instructed = effect.get("instructed_call_sites")
+        if (_declared(effect.get("effect_identity"))
+                and isinstance(instructed, int) and instructed > 0):
+            findings.append(Finding(
+                "EFFECT-006", "WARN",
+                f"Effect {name} declares an identity that {instructed} of its call site(s) cannot carry: those sites are agent instructions, not code, so the identity holds wherever the code performs this effect and nowhere else.",
+                "Route the effect through a script the agent calls, so the identity is applied by code rather than by an instruction the agent may not follow.",
+                f"{path}.instructed_call_sites"))
         if contract == "reconcile" and not _declared(effect.get("readback")):
             findings.append(Finding(
                 "EFFECT-004", "WARN",

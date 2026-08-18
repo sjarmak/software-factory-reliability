@@ -1146,3 +1146,118 @@ def test_the_unsound_section_is_absent_when_every_policy_is_sound(tmp_path):
     matrix = (tmp_path / "effect-matrix.md").read_text()
     assert "resolve an ambiguous outcome by guessing" not in matrix
     assert "UNSOUND" not in matrix
+
+
+def test_a_decided_identity_with_instructed_sites_warns(tmp_path):
+    """The finding that keeps the derived contract honest.
+
+    The derivation now writes the CODE-lane identity, so an effect whose code is
+    unanimous reads as decided even when some call sites are prose telling an
+    agent to run the command. That is the right value and it is not the whole
+    truth: a marker cannot bind a sentence, so the identity holds where code
+    performs the effect and nowhere else. Without this rule, switching the
+    derivation to the code lane would have traded an under-claim for an
+    over-claim -- a clean review on a factory whose agents can skip the flag.
+
+    Mutation: drop the EFFECT-006 block from _check_effects.
+    """
+    clean = ISSUE_TO_PR.read_text()
+    doc = tmp_path / "instructed.yaml"
+    doc.write_text(clean.replace(
+        "    retry_contract: deduplicate",
+        "    instructed_call_sites: 7\n"
+        "    retry_contract: deduplicate", 1))
+    result = run_cli("review", str(doc), "--out", str(tmp_path))
+    ids = [line.split()[1] for line in result.stdout.splitlines()
+           if line.startswith(("FAIL ", "WARN "))]
+    assert "EFFECT-006" in ids, result.stdout
+    assert "7" in result.stdout, result.stdout
+    findings = json.loads((tmp_path / "findings.json").read_text())
+    paths = [f["path"] for f in findings if f["rule"] == "EFFECT-006"]
+    assert paths and all(p.endswith(".instructed_call_sites") for p in paths), paths
+
+
+def test_zero_instructed_sites_does_not_warn(tmp_path):
+    """The other rail, and the reason the field is written even when it is zero.
+
+    A measured zero is the good case and has to read as the good case; if it
+    warned, the derivation would emit a finding for every fully-scripted effect
+    and the rule would be noise rather than a signal.
+
+    Mutation: make the rule fire on `instructed is not None` rather than > 0.
+    """
+    clean = ISSUE_TO_PR.read_text()
+    doc = tmp_path / "no-instructed.yaml"
+    doc.write_text(clean.replace(
+        "    retry_contract: deduplicate",
+        "    instructed_call_sites: 0\n"
+        "    retry_contract: deduplicate", 1))
+    result = run_cli("review", str(doc), "--out", str(tmp_path))
+    assert "EFFECT-006" not in result.stdout, result.stdout
+
+
+def test_an_undecided_identity_does_not_also_warn_about_instructions(tmp_path):
+    """An effect with no decided identity has a bigger problem than where the
+    identity is enforceable, and EFFECT-001 already says so. Firing both turns
+    one defect into two findings and makes the count of an audit depend on how
+    many rules happen to overlap.
+
+    Mutation: drop the _declared(effect_identity) guard from EFFECT-006.
+    """
+    clean = ISSUE_TO_PR.read_text()
+    doc = tmp_path / "undecided-instructed.yaml"
+    doc.write_text(clean.replace(
+        "    retry_contract: deduplicate",
+        "    instructed_call_sites: 4\n"
+        "    retry_contract: deduplicate", 1).replace(
+        "    effect_identity: notification_id",
+        "    effect_identity: unknown", 1))
+    result = run_cli("review", str(doc), "--out", str(tmp_path))
+    assert "EFFECT-006" not in result.stdout, result.stdout
+
+
+def _effect_properties(schema_path):
+    """The effect object's property set, found by shape rather than by path.
+
+    The two schemas nest the effect object differently, and hard-coding either
+    path makes this test fail on a refactor that changed nothing real.
+    """
+    def find(node):
+        if isinstance(node, dict):
+            props = node.get("properties") or {}
+            if node.get("type") == "object" and "effect_identity" in props:
+                return props
+            for value in node.values():
+                found = find(value)
+                if found is not None:
+                    return found
+        elif isinstance(node, list):
+            for value in node:
+                found = find(value)
+                if found is not None:
+                    return found
+        return None
+
+    found = find(json.loads(Path(schema_path).read_text()))
+    assert found is not None, "no effect object in %s" % schema_path
+    return set(found)
+
+
+def test_the_two_schemas_declare_the_same_effect_fields():
+    """Both schemas set additionalProperties false, so a field declared in one
+    and not the other is accepted in one document shape and REJECTED in the
+    other -- for the same effect, written the same way.
+
+    This is the general form of a gap a per-field test cannot cover: adding
+    instructed_call_sites to only the factory schema left every test green,
+    because nothing in the suite validates a standalone effect document against
+    effect.schema.json. The next field would have gone the same way.
+
+    Mutation: rename the property in either file.
+    """
+    standalone = _effect_properties(ROOT / "schemas" / "effect.schema.json")
+    embedded = _effect_properties(ROOT / "schemas" / "factory.schema.json")
+    assert standalone == embedded, {
+        "only in effect.schema.json": sorted(standalone - embedded),
+        "only in factory.schema.json": sorted(embedded - standalone),
+    }

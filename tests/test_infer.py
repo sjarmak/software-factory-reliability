@@ -1477,3 +1477,113 @@ def test_a_key_with_a_trailing_newline_does_not_confirm(tmp_path):
             'effect_identity_key: "idempotency_key\\n"\n    retry_contract: deduplicate'))
     assert "CONFIRMED" not in result.stdout, result.stdout
     assert "UNVERIFIED" in result.stdout, result.stdout
+
+
+# ---------------------------------------------------------------------------
+# The derived contract records the CODE-lane answer, not the strict one.
+#
+# derived_identity() answers "can this be statically guaranteed" and withdraws
+# the identity the moment one call site is a sentence in a prompt. Every
+# agent-driven factory has those, so the strict answer is "unknown" for every
+# effect on any real installation and the derived contract comes out a uniform
+# wall of undecided fields -- an installation whose code is unanimous and one
+# whose code carries nothing produce the identical record.
+#
+# reconcile was fixed for this and infer was not, so one run of the tool printed
+# CONFIRMED for an effect and wrote `effect_identity: unknown` for the same
+# effect in the same breath. These tests hold the two lanes to one answer.
+
+
+def _derived_effect(tmp_path, files, name="slack_publish"):
+    root, probes = _install(tmp_path, files)
+    contract, _ = infer.derive(root, infer.load_probes(probes))
+    return next(e for e in contract["effects"] if e["name"] == name)
+
+
+def test_the_derived_contract_keeps_an_identity_the_code_lane_decides(tmp_path):
+    """Mutation: derive() back to derived_identity() -> effect_identity unknown.
+
+    The instructed site is real and is recorded; what it must not do is erase a
+    unanimous code lane, which is the only fact a reader can act on.
+    """
+    effect = _derived_effect(tmp_path, {
+        "bin/poster": KEYED,
+        "formulas/f.toml": 'prompt = "run gc slack publish-to-channel at the end"\n',
+    })
+    assert effect["effect_identity"] == "idempotency_key"
+    assert effect["instructed_call_sites"] == 1
+
+
+def test_a_real_code_gap_is_still_undecided(tmp_path):
+    """The other rail. Without this the change above could be "always decide".
+
+    Same instructed site as the test above; the difference is one unkeyed
+    scripted site, and it alone has to be enough to withdraw the identity.
+    """
+    effect = _derived_effect(tmp_path, {
+        "bin/poster": KEYED,
+        "bin/bare": BARE,
+        "formulas/f.toml": 'prompt = "run gc slack publish-to-channel at the end"\n',
+    })
+    assert effect["effect_identity"] == "unknown"
+    assert effect["instructed_call_sites"] == 1
+
+
+def test_the_residual_is_written_even_when_it_is_zero(tmp_path):
+    """Mutation: write instructed_call_sites only when truthy.
+
+    An absent field means nobody measured; a zero means somebody measured and
+    found none. Writing only the nonzero case reintroduces, one field over,
+    exactly the decided-and-undecided collapse this change removes.
+    """
+    effect = _derived_effect(tmp_path, {"bin/poster": KEYED})
+    assert effect["instructed_call_sites"] == 0
+
+
+def test_the_emitter_writes_every_field_derive_produces(tmp_path):
+    """The guard for a hand-enumerated emitter.
+
+    _emit_derived_yaml names each field by hand, so a field added to derive()
+    and not added there is dropped in silence -- which is what happened to
+    instructed_call_sites on its first real run: the contract said None while
+    the evidence file had the number. Round-tripping the emitted YAML is the
+    only check that scales to the next field somebody adds.
+    """
+    import yaml
+
+    sys.path.insert(0, str(ROOT / "src"))
+    import factory_check
+
+    root, probes = _install(tmp_path, {
+        "bin/poster": KEYED,
+        "formulas/f.toml": 'prompt = "run gc slack publish-to-channel at the end"\n',
+    })
+    contract, evidence = infer.derive(root, infer.load_probes(probes))
+    produced = {k for e in contract["effects"] for k in e if not k.startswith("_")}
+    emitted = yaml.safe_load(factory_check._emit_derived_yaml(contract, evidence))
+    for effect in emitted["effects"]:
+        missing = produced - set(effect)
+        assert not missing, "emitter dropped %s" % sorted(missing)
+
+
+def test_the_emitted_contract_still_validates(tmp_path):
+    """A generated file that fails its own schema is worse than none.
+
+    instructed_call_sites is the first field the derivation writes into the
+    document BODY rather than a comment, and both schemas set
+    additionalProperties false, so this is the check that it was declared in
+    the schema the generated file is validated against.
+    """
+    import yaml
+
+    sys.path.insert(0, str(ROOT / "src"))
+    import factory_check
+
+    root, probes = _install(tmp_path, {"bin/poster": KEYED})
+    contract, evidence = infer.derive(root, infer.load_probes(probes))
+    text = factory_check._emit_derived_yaml(contract, evidence)
+    path = tmp_path / "factory.derived.yaml"
+    path.write_text(text)
+    status = factory_check._validate_one(path, {})
+    assert status == "ok", status
+    yaml.safe_load(text)

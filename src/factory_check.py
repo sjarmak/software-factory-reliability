@@ -241,6 +241,16 @@ def _emit_derived_yaml(contract, evidence):
     additionalProperties false, and a generated file that fails validation is
     worse than no generated file. Comments carry it, and out/evidence.json
     carries it in a form a script can read.
+
+    One exception, and it is deliberate: instructed_call_sites IS a schema field,
+    because a reviewer has to be able to see that an identity holds only where
+    code performs the effect, and a comment is not something a rule can read.
+
+    This emitter names every field by hand, so a field added to derive() and not
+    added here is dropped in silence -- which is how instructed_call_sites came
+    out None in the first generated contract that had it. test_the_emitter_writes
+    _every_field_derive_produces exists to make that a red test rather than a
+    field nobody notices is missing.
     """
     lines = [
         "# Derived by factory-check infer. Do not hand-edit: rerun the command.",
@@ -277,6 +287,10 @@ def _emit_derived_yaml(contract, evidence):
         lines.append("    retry_contract: %s" % effect["retry_contract"])
         lines.append("    # not derivable from call sites: a decision, not code")
         lines.append("    unknown_state_policy: %s" % effect["unknown_state_policy"])
+        lines.append("    # call sites that are prose telling an agent to run the"
+                     " command; a marker cannot bind a sentence")
+        lines.append("    instructed_call_sites: %d"
+                     % effect["instructed_call_sites"])
     return "\n".join(lines) + "\n"
 
 
@@ -291,10 +305,17 @@ def cmd_infer(args):
     print("scanned %d files, found %d call site(s) across %d effect(s)"
           % (contract.pop("_scanned_files"), total, len(evidence)))
     for item in evidence:
-        value, reason = item.derived_identity()
+        # The same code-lane answer the derived contract records, so the run's
+        # stdout and its output file cannot disagree about the installation.
+        value, reason, residual = item.code_lane_identity()
         mark = "ok  " if value != "unknown" else "MISS"
         print("  %s %-22s %2d site(s), identity %s (%s)"
               % (mark, item.name, len(item.sites), value, reason))
+        # Printed on its own line rather than folded into the reason, because it
+        # is the one fact that survives fixing every scripted site.
+        if residual:
+            print("         %d further site(s) are agent instructions; no marker "
+                  "can bind them" % residual)
         for site in item.missing_identity:
             print("         no %s: %s:%d" % (item.identity_name, site.path, site.line))
         # Printed under their own heading, with the matched text, because the
@@ -311,8 +332,16 @@ def cmd_infer(args):
                 "effect": e.name,
                 "destination": e.destination,
                 "identity_name": e.identity_name,
+                # BOTH answers, deliberately. The strict one is "can this be
+                # statically guaranteed" and the code-lane one is "does the code
+                # that performs it carry the identity"; they differ exactly when
+                # an agent is instructed in prose, and a consumer that can only
+                # see one of them cannot tell that case from a real gap.
                 "derived_identity": e.derived_identity()[0],
                 "reason": e.derived_identity()[1],
+                "code_lane_identity": e.code_lane_identity()[0],
+                "code_lane_reason": e.code_lane_identity()[1],
+                "instructed_call_sites": e.code_lane_identity()[2],
                 "sites": [vars(s) for s in e.sites],
             }
             for e in evidence

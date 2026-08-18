@@ -1074,20 +1074,37 @@ def derive(root, probes, notes=None):
 
     effects = []
     for item in evidence:
-        value, reason = item.derived_identity()
-        effects.append(
-            {
-                "name": item.name,
-                "destination": item.destination,
-                "effect_identity": value,
-                # Not derivable from call sites. How a destination behaves on a
-                # repeat is a property of the destination, and what the caller
-                # does with an ambiguous outcome is a decision, not code.
-                "retry_contract": "unknown",
-                "unknown_state_policy": "unknown",
-                "_reason": reason,
-            }
-        )
+        # The CODE-lane answer, not the strict one. derived_identity() withdraws
+        # the identity the moment a single call site is a sentence in a prompt
+        # template, and every agent-driven factory has those -- so the strict
+        # answer is "unknown" for every effect on any real installation, and the
+        # derived contract comes out a uniform wall of undecided fields. That is
+        # the same collapse the retry_contract and unknown_state_policy
+        # vocabularies had: an effect whose code is unanimous and an effect whose
+        # code does not carry the identity at all produce an identical record.
+        #
+        # reconcile had this fixed already and infer never got it, which is why
+        # one run of this tool could print CONFIRMED for slack_publish and write
+        # `effect_identity: unknown` for the same effect in the same breath.
+        value, reason, residual = item.code_lane_identity()
+        effect = {
+            "name": item.name,
+            "destination": item.destination,
+            "effect_identity": value,
+            # Not derivable from call sites. How a destination behaves on a
+            # repeat is a property of the destination, and what the caller
+            # does with an ambiguous outcome is a decision, not code.
+            "retry_contract": "unknown",
+            "unknown_state_policy": "unknown",
+            "_reason": reason,
+        }
+        # The residual is written whenever it was measured, including zero. An
+        # absent field means nobody looked; a zero means somebody looked and
+        # found none, and a reviewer has to be able to tell those apart. Writing
+        # it ONLY when nonzero would reintroduce, one field over, exactly the
+        # ambiguity this change exists to remove.
+        effect["instructed_call_sites"] = residual
+        effects.append(effect)
 
     contract = {
         "version": "factory.reliability/v1",
