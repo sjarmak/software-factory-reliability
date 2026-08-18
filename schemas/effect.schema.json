@@ -22,6 +22,12 @@
       "minLength": 1,
       "description": "Stable logical identity of one intended effect, carried unchanged across retries. If this identity embeds the attempt identity, every retry mints a new effect and deduplication becomes impossible; the review rules flag that pattern. Use \"unknown\" if not yet decided."
     },
+    "effect_identity_key": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z_][A-Za-z0-9_.-]*$",
+      "description": "Optional. The token a call site actually carries for this identity, when effect_identity is written as prose. The reconciler compares this against what the installation's call sites bind; effect_identity stays human-readable. Omit it when effect_identity is itself the token."
+    },
     "retry_contract": {
       "enum": ["deduplicate", "converge", "reconcile", "unknown"],
       "description": "What holds when the same effect_identity is submitted more than once. deduplicate: the destination atomically stores the identity with the effect and returns the original receipt for repeats. converge: the operation is idempotent, so repeating it reaches the same final state. reconcile: the caller queries the destination for a prior effect (see readback) before repeating; weaker than destination deduplication, and it assumes callers for one identity are serialized. \"unknown\" records that the builder has not decided; the review rules flag it."

@@ -15,6 +15,7 @@ Schemas are located relative to this script, not the working directory.
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -382,6 +383,56 @@ def cmd_probes_init(args):
     return 0
 
 
+# An effect_identity that is a bare identifier is being USED as a key: it is
+# the token a call site would carry. Anything with a space, a comma or a
+# sentence in it is a human describing a composite identity, and comparing that
+# to a probe's token with == is a vocabulary error, not a measurement.
+#
+# This is a syntactic test, not a judgement about meaning, and both ways of
+# being wrong are safe. Prose mistaken for a key reads DRIFT, which is loud and
+# whose fix is to name the key. A key mistaken for prose reads UNVERIFIED and
+# prints the exact line to add. Neither can produce a false CONFIRMED, which is
+# the only direction this tool is never allowed to be wrong in.
+_KEY_SHAPED = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
+
+
+def _comparable_key(effect, claimed):
+    """The token to compare against the probe's identity, or None.
+
+    None means the contract has not named one: it described the identity in
+    prose and did not set effect_identity_key. There is nothing to compare, and
+    saying so is the honest answer -- reporting DRIFT there accuses the
+    installation of something the contract never claimed.
+    """
+    explicit = effect.get("effect_identity_key")
+    if isinstance(explicit, str) and explicit.strip():
+        return explicit.strip()
+    if isinstance(claimed, str) and _KEY_SHAPED.match(claimed.strip()):
+        return claimed.strip()
+    return None
+
+
+def _identity_conflict(effect, claimed):
+    """The contract naming two different identities, or None.
+
+    effect_identity_key exists so a composite identity can stay in prose and
+    still be checkable. It is NOT an override. When effect_identity is itself a
+    bare token, it already names a key, and a different effect_identity_key
+    beside it means the contract says two things -- which used to read DRIFT on
+    the prose value and would otherwise now read CONFIRMED on the key, turning
+    a new field into a way to declare yourself correct.
+    """
+    explicit = effect.get("effect_identity_key")
+    if not (isinstance(explicit, str) and explicit.strip()):
+        return None
+    if not (isinstance(claimed, str) and _KEY_SHAPED.match(claimed.strip())):
+        return None
+    if claimed.strip() == explicit.strip():
+        return None
+    return ("the contract names two identities: effect_identity %s and "
+            "effect_identity_key %s" % (claimed.strip(), explicit.strip()))
+
+
 def _with_residual(reason, residual):
     """Never report a code-lane confirmation without its unbindable residual.
 
@@ -438,6 +489,8 @@ def cmd_reconcile(args):
         # is compared here; the unbindable residual is carried alongside it and
         # printed, never dropped.
         code_derived, code_reason, residual = item.code_lane_identity()
+        claimed_key = _comparable_key(effect, claimed)
+        conflict = _identity_conflict(effect, claimed)
         if claimed in (None, "unknown"):
             if derived != "unknown":
                 unverifiable.append(
@@ -450,6 +503,9 @@ def cmd_reconcile(args):
                 # left open from one the report simply never reached.
                 open_items.append((name, reason))
             continue
+        if conflict:
+            drift.append((name, claimed, conflict))
+            continue
         if code_derived == "unknown":
             if not (item.scripted or item.fenced) and residual:
                 # No code performs the effect at all: every site is an agent
@@ -460,15 +516,36 @@ def cmd_reconcile(args):
                 unverifiable.append((name, code_reason))
             else:
                 drift.append((name, claimed, code_reason))
-        elif claimed != code_derived:
+        elif claimed_key is None:
+            # Reachable only once the code lane derives a DECIDED identity. A
+            # prose contract over call sites that carry no marker at all stays
+            # DRIFT above, and that is right: the installation is missing the
+            # identity whatever vocabulary the contract used, and the vocabulary
+            # question does not arise until there is something to compare.
+            #
+            # The code lane carries a decided identity and the contract
+            # describes its own in prose. Those are two vocabularies, and the
+            # equality that used to run here could never match -- so on exactly
+            # the effects whose identity is interesting enough to need a
+            # sentence, fixing the last unmarked call site did not move the
+            # verdict. That is the failure this tool exists to catch, in the
+            # tool.
+            unverifiable.append(
+                (name,
+                 "the contract describes its identity in prose and does not "
+                 "name a key; the call sites carry %s, and the two cannot be "
+                 "compared. Add effect_identity_key: %s if that is what the "
+                 "prose means." % (code_derived, code_derived)))
+        elif claimed_key != code_derived:
             # Two decided values that disagree is the sharpest drift there is:
             # the contract names an identity the call sites do not carry, and
             # without this branch it read as confirmed.
             drift.append(
-                (name, claimed,
-                 "call sites carry %s, not %s" % (code_derived, claimed)))
+                (name, claimed_key,
+                 "call sites carry %s, not %s" % (code_derived, claimed_key)))
         else:
-            confirmed.append((name, claimed, _with_residual(code_reason, residual)))
+            confirmed.append(
+                (name, claimed_key, _with_residual(code_reason, residual)))
 
     # Effects the installation performs and the contract never mentions are
     # kept OUT of the drift bucket. Folding them in inflated drift past the

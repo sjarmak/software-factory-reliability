@@ -218,12 +218,23 @@ def _check_effects(doc, work, findings):
                 f"Effect {name} has no decided effect_identity; the destination cannot recognize a repeat.",
                 "Give each intended effect a stable logical identity carried unchanged across retries.",
                 f"{path}.effect_identity"))
-        elif (_declared(attempt) and attempt in identity) or "attempt" in identity.lower():
-            findings.append(Finding(
-                "IDENT-002", "WARN",
-                f"Effect {name} keys its effect_identity ({identity}) on the attempt identity; every retry mints a new effect id, so no destination can deduplicate.",
-                "Derive effect_identity from the logical work item, not the attempt.",
-                f"{path}.effect_identity"))
+        else:
+            # Both places an identity can be written, not just the prose one.
+            # effect_identity_key was added so a composite identity can stay in
+            # prose and still be machine-checkable; a rule that reads only the
+            # prose lets an attempt-scoped key in through the new field, and the
+            # reconciler then CONFIRMS it against call sites that faithfully
+            # carry an identity no destination can deduplicate on.
+            for field in ("effect_identity", "effect_identity_key"):
+                value = effect.get(field)
+                if not _declared(value):
+                    continue
+                if (_declared(attempt) and attempt in value) or "attempt" in value.lower():
+                    findings.append(Finding(
+                        "IDENT-002", "WARN",
+                        f"Effect {name} keys its {field} ({value}) on the attempt identity; every retry mints a new effect id, so no destination can deduplicate.",
+                        "Derive the effect identity from the logical work item, not the attempt.",
+                        f"{path}.{field}"))
         contract = effect.get("retry_contract")
         if contract not in ALLOWED_RETRY_CONTRACTS:
             findings.append(Finding(

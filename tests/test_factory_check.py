@@ -761,3 +761,24 @@ def test_probes_init_can_be_told_to_read_ignored_paths(tmp_path):
                   "--scan-ignored-paths")
     assert out.returncode == 0, out.stdout + out.stderr
     assert "logs/" in pack.read_text()
+
+
+def test_ident_002_reads_the_key_as_well_as_the_prose(tmp_path):
+    """effect_identity_key exists so a composite identity can stay in prose and
+    still be machine-checkable. A rule that reads only the prose lets an
+    attempt-scoped identity in through the new field, and the reconciler then
+    CONFIRMS it against call sites that faithfully carry an identity no
+    destination can ever deduplicate on -- the strongest possible green for
+    the exact defect the rule exists to catch.
+    """
+    clean = ISSUE_TO_PR.read_text()
+    doc = tmp_path / "attempt-keyed.yaml"
+    # The prose stays innocent; only the key is attempt-scoped.
+    doc.write_text(clean.replace(
+        "    effect_identity: notification_id",
+        "    effect_identity: the (channel, thread) pair\n"
+        "    effect_identity_key: attempt_id", 1))
+    result = run_cli("review", str(doc), "--out", str(tmp_path))
+    ids = [line.split()[1] for line in result.stdout.splitlines()
+           if line.startswith(("FAIL ", "WARN "))]
+    assert "IDENT-002" in ids, result.stdout

@@ -334,6 +334,184 @@ def test_reconcile_drifts_when_the_declared_identity_is_not_the_derived_one(tmp_
     assert "carry idempotency_key, not request_uuid" in result.stdout
 
 
+def _reconcile_with(tmp_path, contract_text, files=None):
+    root, probes = _install(tmp_path, files or {"bin/poster": KEYED})
+    contract = tmp_path / "factory.yaml"
+    contract.write_text(contract_text)
+    return subprocess.run(
+        [sys.executable, str(ROOT / "src" / "factory_check.py"), "reconcile",
+         str(contract), str(root), "--probes", str(probes)],
+        capture_output=True, text=True, cwd=tmp_path)
+
+
+PROSE_CONTRACT = CONTRACT.replace(
+    "effect_identity: idempotency_key",
+    'effect_identity: "the (channel, thread, message body) triple; the key is what the destination deduplicates on"')
+
+
+def test_an_identity_described_in_prose_is_not_drift(tmp_path):
+    """The contract's effect_identity is written by a human describing what
+    identifies the effect; the probe's identity name is the token the scanner
+    binds. Comparing them with == is a vocabulary error that happens to work
+    whenever the author guessed the token, and can NEVER match on the effects
+    whose identity is a composite worth a sentence.
+
+    That is not a cosmetic wrong answer. It means fixing the last unmarked call
+    site does not move the verdict -- doing the right thing and the reading not
+    changing, which is the exact failure this tool exists to catch.
+
+    Every call site here carries the key. Before the fix this printed DRIFT and
+    exited 1.
+    """
+    result = _reconcile_with(tmp_path, PROSE_CONTRACT)
+    assert result.returncode == 0, result.stdout
+    assert "DRIFT" not in result.stdout
+    assert "UNVERIFIED" in result.stdout
+    # The message has to carry the fix, not just the complaint: a reader who
+    # cannot tell what to type is told the identity is unverifiable forever.
+    assert "effect_identity_key: idempotency_key" in result.stdout
+
+
+def test_naming_the_key_beside_the_prose_confirms(tmp_path):
+    """The prose stays where it belongs and the contract names the token. This
+    is the only way a composite identity can ever read CONFIRMED."""
+    result = _reconcile_with(
+        tmp_path,
+        PROSE_CONTRACT.replace(
+            "retry_contract: deduplicate",
+            "effect_identity_key: idempotency_key\n    retry_contract: deduplicate"))
+    assert result.returncode == 0, result.stdout
+    assert "CONFIRMED" in result.stdout
+    assert "UNVERIFIED" not in result.stdout
+
+
+def test_a_named_key_that_is_wrong_still_drifts(tmp_path):
+    """The escape hatch is not a way to declare yourself correct. Naming a key
+    the call sites do not carry is the sharpest drift there is, and a fix that
+    only ever moved verdicts toward CONFIRMED would be worse than the bug."""
+    result = _reconcile_with(
+        tmp_path,
+        PROSE_CONTRACT.replace(
+            "retry_contract: deduplicate",
+            "effect_identity_key: request_uuid\n    retry_contract: deduplicate"))
+    assert result.returncode == 1
+    assert "carry idempotency_key, not request_uuid" in result.stdout
+
+
+def test_the_prose_lane_does_not_swallow_a_wrong_token(tmp_path):
+    """A one-word wrong identity is a key, not prose, and stays DRIFT. Without
+    the shape test every wrong identity in the corpus would quietly become
+    UNVERIFIED, which is a guard that can no longer go red."""
+    result = _reconcile_with(
+        tmp_path,
+        CONTRACT.replace("effect_identity: idempotency_key",
+                         "effect_identity: request_uuid"))
+    assert result.returncode == 1
+    assert "carry idempotency_key, not request_uuid" in result.stdout
+
+
+def test_a_key_and_a_different_prose_token_is_a_contradiction(tmp_path):
+    """The escape hatch is not an override. effect_identity here is itself a
+    bare token, so it already names a key; a different effect_identity_key
+    beside it means the contract says two things. Without the conflict check
+    this reads CONFIRMED on the key, which turns a new field into a way to
+    declare yourself correct -- the same contract read DRIFT before the field
+    existed."""
+    result = _reconcile_with(
+        tmp_path,
+        CONTRACT.replace(
+            "effect_identity: idempotency_key\n    retry_contract: deduplicate",
+            "effect_identity: request_uuid\n"
+            "    effect_identity_key: idempotency_key\n"
+            "    retry_contract: deduplicate"))
+    assert result.returncode == 1, result.stdout
+    assert "names two identities" in result.stdout
+    assert "CONFIRMED" not in result.stdout
+
+
+def test_prose_with_no_spaces_is_still_prose(tmp_path):
+    """A key shape of "anything without whitespace" passes every other test in
+    this file and lets `channel/thread/message` confirm against a probe token it
+    does not name."""
+    result = _reconcile_with(
+        tmp_path,
+        CONTRACT.replace("effect_identity: idempotency_key",
+                         "effect_identity: channel/thread/message"))
+    assert result.returncode == 0, result.stdout
+    assert "UNVERIFIED" in result.stdout
+    assert "DRIFT" not in result.stdout
+
+
+def test_a_token_with_a_dash_or_a_digit_is_a_key(tmp_path):
+    """A key shape narrowed to letters and underscores passes every other test
+    here while quietly moving real token names into the prose lane, where they
+    can never drift again."""
+    for token in ("request-id", "identity.v2", "key2"):
+        result = _reconcile_with(
+            tmp_path,
+            CONTRACT.replace("effect_identity: idempotency_key",
+                             "effect_identity: %s" % token))
+        assert result.returncode == 1, (token, result.stdout)
+        assert "carry idempotency_key, not %s" % token in result.stdout
+
+
+def test_the_key_comparison_is_case_sensitive(tmp_path):
+    """The probe's token is a literal the scanner matches in source. Folding
+    case here would confirm a contract naming a token no call site carries."""
+    result = _reconcile_with(
+        tmp_path,
+        CONTRACT.replace(
+            "retry_contract: deduplicate",
+            "effect_identity_key: Idempotency_Key\n    retry_contract: deduplicate")
+        .replace("effect_identity: idempotency_key",
+                 'effect_identity: "the channel and the message body"'))
+    assert result.returncode == 1, result.stdout
+    assert "carry idempotency_key, not Idempotency_Key" in result.stdout
+
+
+def test_the_schema_and_the_key_shape_agree(tmp_path):
+    """Two copies of one grammar, in a JSON file and in a regex, drift the
+    moment either is edited alone -- and the drift is silent: the schema would
+    accept a value reconcile then treats as prose, or reject one it would have
+    compared."""
+    import json
+    from factory_check import _KEY_SHAPED
+    for name in ("factory.schema.json", "effect.schema.json"):
+        doc = json.loads((ROOT / "schemas" / name).read_text())
+        found = []
+
+        def walk(node):
+            if isinstance(node, dict):
+                if "effect_identity_key" in node:
+                    found.append(node["effect_identity_key"])
+                for v in node.values():
+                    walk(v)
+            elif isinstance(node, list):
+                for v in node:
+                    walk(v)
+
+        walk(doc)
+        assert found, name
+        for decl in found:
+            assert decl.get("pattern") == _KEY_SHAPED.pattern, (name, decl)
+
+
+def test_a_padded_key_is_a_schema_error_not_a_silent_strip(tmp_path):
+    """minLength alone accepts "   " and " idempotency_key ". The first reads as
+    absent and the second is normalized into a confirmation, so two values the
+    schema called valid get two different silent treatments."""
+    contract = tmp_path / "factory.yaml"
+    contract.write_text(CONTRACT.replace(
+        "retry_contract: deduplicate",
+        'effect_identity_key: " idempotency_key "\n    retry_contract: deduplicate'))
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "src" / "factory_check.py"), "validate",
+         str(contract)],
+        capture_output=True, text=True, cwd=tmp_path)
+    assert result.returncode != 0, result.stdout
+    assert "effect_identity_key" in result.stdout + result.stderr
+
+
 def test_reconcile_reports_an_effect_the_contract_never_declared(tmp_path):
     root, probes = _install(tmp_path, {"bin/bare": BARE})
     contract = tmp_path / "factory.yaml"
