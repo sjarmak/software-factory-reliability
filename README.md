@@ -131,13 +131,39 @@ boundary, the falsifying test, and the evidence retained.
 
 The other eleven pages are indexed in [`patterns/`](patterns/README.md).
 
-**Use it on your own factory.** Describe the factory in a contract file and
-let the checker tell you which boundaries are open.
+**Use it on your own factory.** Read the installation first, then decide. The
+scaffold finds the effects your factory performs on something outside itself
+and writes a probe pack naming them and the files they were found in; the
+derivation reports, per effect, whether the call sites carry anything a
+destination could use to tell a repeat from a new request.
 
 ```bash
-python3 src/factory_check.py init factory.yaml   # a starter, "unknown" where you must decide
-python3 src/factory_check.py review factory.yaml # findings, one per open boundary
+python3 src/factory_check.py probes-init /path/to/your/factory --write probes.yaml
+python3 src/factory_check.py infer       /path/to/your/factory --probes probes.yaml
+python3 src/factory_check.py review      out/factory.derived.yaml
 ```
+
+Every identity comes back `unknown` on the first pass, with the reason on the
+line above it, because a scaffolded pack declares none and no scan of your code
+can establish what your destination does with a repeat. Deciding those is the
+part that needs you, and the scaffold offers the flags it saw at the call sites
+as candidates rather than applying any of them.
+
+That order matters. `init` writes a blank contract, and a blank contract can be
+edited to a decided value while the factory stays exactly as it was -- findings
+go green and nothing is fixed. Write one when you want to state the intent
+independently, then hold the two against each other:
+
+```bash
+python3 src/factory_check.py init factory.yaml
+python3 src/factory_check.py reconcile factory.yaml /path/to/your/factory --probes probes.yaml
+```
+
+Reconcile reports DRIFT where the contract claims an identity the call sites do
+not carry, and UNDECLARED for an effect your factory performs and your contract
+never mentions. DRIFT is what a contract edited ahead of the code looks like:
+editing the claim back down turns it into OPEN, an undecided boundary, and only
+the call sites can turn it into CONFIRMED.
 
 [QUICKSTART.md](QUICKSTART.md) walks the full first session under an hour, and
 [`docs/contract-reference.md`](docs/contract-reference.md) documents every
