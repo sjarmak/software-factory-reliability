@@ -45,6 +45,7 @@ harness_globs: &harness_globs
   - "hooks/*.test"
 
 scan:
+  respect_vcs_ignore: true
   include_globs:
     - "bin/*"
     - "bin/**/*"
