@@ -109,3 +109,15 @@ observability:
     - completed_to_verified
     - verified_to_published
     - published_to_acknowledged
+  # Illustrative, not recommended defaults. This example's whole point is that
+  # the work itself is long, so the thresholds that matter are the ones on the
+  # transitions AROUND the work, not on the work: started_to_progress is short
+  # because it measures the heartbeat, not the task. Set your own from measured
+  # p95, or the alarm gets switched off.
+  objectives:
+    ready_to_claim:            {p95: 1h}
+    claimed_to_started:        {p95: 10m}
+    started_to_progress:       {p95: 20m}
+    completed_to_verified:     {p95: 4h}
+    verified_to_published:     {p95: 2h}
+    published_to_acknowledged: {p95: 48h}

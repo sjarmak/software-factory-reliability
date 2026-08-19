@@ -98,8 +98,8 @@ def test_review_unsafe_golden_rule_multiset(tmp_path):
     assert fails == ["AUTH-002", "AUTH-002", "CAMP-001", "EFFECT-003",
                      "VERIFY-001", "VERIFY-002"]
     assert warns == ["CODE-000", "EFFECT-004", "FLEET-001", "FLEET-002",
-                     "FLEET-003", "IDENT-002", "OBS-001", "RECON-001",
-                     "RECON-001", "RECON-002"]
+                     "FLEET-003", "IDENT-002", "OBS-001", "OBS-002",
+                     "RECON-001", "RECON-001", "RECON-002"]
 
 
 def test_review_unsafe_factory_findings(tmp_path):
@@ -428,8 +428,8 @@ EXPECTED_EXAMPLE_FINDINGS = {
         "FAIL": {"AUTH-002": 2, "CAMP-001": 1, "EFFECT-003": 1,
                  "VERIFY-001": 1, "VERIFY-002": 1},
         "WARN": {"CODE-000": 1, "EFFECT-004": 1, "FLEET-001": 1, "FLEET-002": 1,
-                 "FLEET-003": 1, "IDENT-002": 1, "OBS-001": 1, "RECON-001": 2,
-                 "RECON-002": 1},
+                 "FLEET-003": 1, "IDENT-002": 1, "OBS-001": 1, "OBS-002": 1,
+                 "RECON-001": 2, "RECON-002": 1},
     },
 }
 
@@ -1502,3 +1502,192 @@ def test_an_unknown_key_under_observability_is_still_refused(tmp_path):
     path = _with_objectives(tmp_path, {"promises": ["started_to_progress"],
                                        "objective": {"started_to_progress": {"p90": "4d"}}})
     assert run_cli("validate", str(path)).returncode != 0
+
+
+# --- observability objectives as a REVIEW rule (2026-08-19) ----------------
+#
+# The schema landed `objectives` as optional and the review said nothing about
+# it, so a contract listing all six canonical promises with zero objectives
+# passed OBS-001 clean while watching nothing. A promise with no threshold
+# cannot be breached, and a review that counts promises reads that as coverage.
+#
+# WARN, never FAIL, and the distinction is the point: an undeclared promise is
+# a transition nobody is looking at, an undecided threshold is a transition
+# somebody is looking at without having decided what bad means. Those are
+# different pieces of work and want different urgency.
+#
+# The orphan rule is the same defect pointing the other way. The schema's own
+# description already says every objectives key must appear in promises, and a
+# JSON Schema cannot express a cross-field constraint, so it was documentation
+# with nothing behind it. An objective left behind by a withdrawn promise is
+# dead configuration that reads like coverage -- the more misleading of the two,
+# because it looks MORE watched than the contract actually is.
+
+CANONICAL_PROMISES = rules_mod.CANONICAL_PROMISES
+
+
+def _obs_review(tmp_path, block, name="obs.yaml"):
+    """Review a schema-valid contract carrying one observability block."""
+    path = _with_objectives(tmp_path, block, name=name)
+    return run_cli("review", str(path), "--out", str(tmp_path / "out"))
+
+
+def _finding(out_dir, code):
+    """The full finding record for one code, or None.
+
+    The stdout lines carry the code and the severity only, so an assertion
+    about WHICH promises a finding names has to read the machine-readable
+    output -- which is also what a consumer of this kit reads.
+    """
+    import json
+    data = json.loads((Path(out_dir) / "findings.json").read_text())
+    records = data["findings"] if isinstance(data, dict) else data
+    for record in records:
+        if record.get("rule") == code:
+            return record
+    return None
+
+
+def test_promises_with_no_objectives_warn(tmp_path):
+    # The exact shape the rule exists for: full canonical coverage, nothing
+    # watched. Before this rule the same contract produced no observability
+    # finding at all.
+    result = _obs_review(tmp_path, {"promises": list(CANONICAL_PROMISES)})
+    warns = finding_lines(result.stdout, "WARN")
+    assert any("OBS-002" in line for line in warns), result.stdout
+    assert not any("OBS-001" in line for line in warns), \
+        "all six are declared, so OBS-001 must not fire: " + result.stdout
+    assert not any("OBS-0" in line for line in finding_lines(result.stdout, "FAIL")), \
+        "an undecided threshold is not the same defect as an undeclared promise"
+
+
+def test_objectives_on_every_promise_is_silent(tmp_path):
+    result = _obs_review(tmp_path, {
+        "promises": list(CANONICAL_PROMISES),
+        "objectives": {p: {"p95": "1h"} for p in CANONICAL_PROMISES},
+    })
+    # Scoped to the observability codes: this fixture is built on
+    # minimal-factory.yaml, which carries unrelated findings of its own.
+    assert not any("OBS-0" in line for line in finding_lines(result.stdout, "WARN")), result.stdout
+    assert not any("OBS-0" in line for line in finding_lines(result.stdout, "FAIL")), result.stdout
+
+
+def test_partial_objectives_name_only_the_unwatched(tmp_path):
+    # Naming them matters more than counting them: "2 promises lack objectives"
+    # tells a reader to go diff two lists by hand.
+    watched = list(CANONICAL_PROMISES)[:4]
+    result = _obs_review(tmp_path, {
+        "promises": list(CANONICAL_PROMISES),
+        "objectives": {p: {"p95": "1h"} for p in watched},
+    })
+    record = _finding(tmp_path / "out", "OBS-002")
+    assert record is not None, result.stdout
+    detail = json.dumps(record)
+    for p in CANONICAL_PROMISES:
+        if p in watched:
+            assert p not in detail, f"{p} has an objective and must not be named: {detail}"
+        else:
+            assert p in detail, f"{p} has no objective and must be named: {detail}"
+
+
+def test_objective_for_an_undeclared_promise_warns(tmp_path):
+    # Dead configuration that reads like coverage. Withdraw a promise, leave its
+    # threshold behind, and the contract looks more watched than it is.
+    result = _obs_review(tmp_path, {
+        "promises": ["started_to_progress"],
+        "objectives": {"started_to_progress": {"p95": "1h"},
+                       "verified_to_published": {"p95": "1h"}},
+    })
+    assert any("OBS-003" in l for l in finding_lines(result.stdout, "WARN")), result.stdout
+    record = _finding(tmp_path / "out", "OBS-003")
+    detail = json.dumps(record)
+    assert "verified_to_published" in detail, detail
+    assert "started_to_progress" not in detail, \
+        "a promise that IS declared must not be named as an orphan: " + detail
+
+
+def test_no_observability_section_reports_only_obs_001(tmp_path):
+    # OBS-001 already says nothing is watched. Adding "and none of the things
+    # you did not declare have thresholds" is noise, and it is the shape that
+    # makes people stop reading a findings list.
+    minimal = EXAMPLES / "minimal-factory.yaml"
+    result = run_cli("review", str(minimal), "--out", str(tmp_path / "out"))
+    warns = finding_lines(result.stdout, "WARN")
+    assert any("OBS-001" in line for line in warns), result.stdout
+    assert not any("OBS-002" in line or "OBS-003" in line for line in warns), result.stdout
+
+
+def test_reference_examples_declare_their_objectives(tmp_path):
+    # The kit's own reference contracts have to model the shape the rule asks
+    # for. This is the test that would have caught shipping the rule while
+    # leaving our own examples tripping over it.
+    # Derived from the pinned expectations rather than hand-listed: an example
+    # added later would silently escape a hand-list, which is the failure mode
+    # this kit spends most of its rules on.
+    clean = [name for name, expected in EXPECTED_EXAMPLE_FINDINGS.items()
+             if not expected["FAIL"] and not expected["WARN"]]
+    assert clean, "no clean reference example is pinned; this test proves nothing"
+    for name in clean:
+        result = run_cli("review", str(_example_path(name)), "--out", str(tmp_path / name.replace("/", "-")))
+        warns = finding_lines(result.stdout, "WARN")
+        assert not any("OBS-00" in line for line in warns), f"{name}: {result.stdout}"
+
+
+# examples/README.md enumerates the unsafe contract's findings twice over: once
+# as a spelled-out count in a <summary>, and once as a table with one row per
+# finding. Neither form is a digit, so both rails above -- which key on
+# r"\d+ FAIL, \d+ WARN" -- are blind to them, and the page says in its own prose
+# that "the counts are pinned by tests". They were not. Adding OBS-002 moved the
+# real count to eleven and left the word "Ten" and a nine-row table standing,
+# and the full suite stayed green; a cross-family reviewer found it by reading.
+#
+# So the third rail reads the page's tables and compares them to the live
+# findings, with multiplicity, by SET EQUALITY. A row that should have gone away
+# fails too, which is the half a subset check would miss.
+_NUMBER_WORDS = {1: "One", 2: "Two", 3: "Three", 4: "Four", 5: "Five", 6: "Six",
+                 7: "Seven", 8: "Eight", 9: "Nine", 10: "Ten", 11: "Eleven",
+                 12: "Twelve", 13: "Thirteen", 14: "Fourteen", 15: "Fifteen",
+                 16: "Sixteen", 17: "Seventeen", 18: "Eighteen",
+                 19: "Nineteen", 20: "Twenty"}
+
+
+def _details_blocks(text):
+    """{summary text: [rule codes in the block's table rows]} for each <details>."""
+    blocks, summary, rules_seen = {}, None, []
+    for line in text.splitlines():
+        match = re.search(r"<summary>(.*?)</summary>", line)
+        if match:
+            summary, rules_seen = match.group(1), []
+            continue
+        if "</details>" in line and summary is not None:
+            blocks[summary] = rules_seen
+            summary = None
+            continue
+        if summary is not None:
+            cell = re.match(r"\|\s*`([A-Z]+-\d+)`\s*\|", line)
+            if cell:
+                rules_seen.append(cell.group(1))
+    return blocks
+
+
+def test_examples_readme_tables_enumerate_the_actual_findings(tmp_path):
+    """The spelled-out counts and the per-rule tables both stay true."""
+    result = run_cli("review", str(UNSAFE), "--out", str(tmp_path))
+    findings = json.loads((tmp_path / "findings.json").read_text())
+    blocks = _details_blocks((ROOT / "examples/README.md").read_text())
+    assert blocks, "no <details> blocks found in examples/README.md; the parse is broken"
+
+    for severity in ("FAIL", "WARN"):
+        live = sorted(f["rule"] for f in findings if f["severity"] == severity)
+        word = _NUMBER_WORDS[len(live)]
+        label = f"{word} {'failure' if severity == 'FAIL' else 'warning'}"
+        matching = [s for s in blocks if s.lower().startswith(label.lower())]
+        assert matching, (
+            f"examples/README.md has no <details> summary reading "
+            f"{label + ('s' if len(live) != 1 else '')!r}; it reads "
+            f"{sorted(blocks)!r} and the unsafe contract now produces "
+            f"{len(live)} {severity} findings")
+        assert sorted(blocks[matching[0]]) == live, (
+            f"the {severity} table in examples/README.md lists "
+            f"{sorted(blocks[matching[0]])} and the unsafe contract produces "
+            f"{live}; add the missing row or drop the stale one")

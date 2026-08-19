@@ -34,7 +34,7 @@ valid and fail eleven rules; the deliberately unsafe example in
 | `scheduling` | no | how execution capacity is partitioned and made fair | `FLEET-001` to `FLEET-003` |
 | `code_estate` | no | how the factory names the code it operates on (repository plus revision) | `CODE-000` |
 | `campaigns` | no | the completion rule for multi-target campaigns | `CAMP-001` |
-| `observability` | no | which lifecycle promises are watched | `OBS-001` |
+| `observability` | no | which lifecycle promises are watched, and against what thresholds | `OBS-001` to `OBS-003` |
 
 Absence is never a silent pass. A section you omit produces the not-declared
 finding under the rule that governs it, because "we have not decided" and "we
@@ -43,7 +43,7 @@ an incident review.
 
 ## Rule catalog
 
-Twenty-five rules. FAIL means the contract describes a system with an open
+Twenty-seven rules. FAIL means the contract describes a system with an open
 failure boundary. WARN means the contract leaves something undecided that will
 be decided under pressure later.
 
@@ -272,6 +272,8 @@ Anything else leaves a target unaccounted for.
 | Rule | Severity | Fires when | Pattern |
 | --- | --- | --- | --- |
 | `OBS-001` | WARN | a canonical lifecycle promise is unwatched | [promise-oriented-observability](../patterns/promise-oriented-observability.md) |
+| `OBS-002` | WARN | a promise is declared with no objective, so nothing can breach it | [promise-oriented-observability](../patterns/promise-oriented-observability.md) |
+| `OBS-003` | WARN | an objective names a transition that is not promised | [promise-oriented-observability](../patterns/promise-oriented-observability.md) |
 
 The six canonical promises are `ready_to_claim`, `claimed_to_started`,
 `started_to_progress`, `completed_to_verified`, `verified_to_published`, and
@@ -279,10 +281,37 @@ The six canonical promises are `ready_to_claim`, `claimed_to_started`,
 leads to the next, so a stall between two states is alertable without any
 component reporting an error.
 
+`observability.objectives` is where a promise stops being a dashboard. A
+transition with no threshold cannot be breached, so a contract can list all six
+and still watch nothing, and a review that counts promises reads that as
+coverage. An objective is one percentile and one duration per promise, and the
+duration carries an explicit unit: `p95: 30m`, never `p95: 30`. A bare number is
+refused rather than assumed to be seconds, because an objective is written once
+and re-read rarely, and a threshold whose unit was guessed fires constantly and
+gets switched off.
+
+Both objective rules are WARN and neither will ever be FAIL. An undeclared
+promise is a transition nobody is looking at; an undecided threshold is a
+transition somebody is looking at without having decided what bad means. Those
+are different pieces of work.
+
+`OBS-003` is the same defect pointing the other way and is the more misleading
+of the two: a threshold left behind by a withdrawn promise makes the contract
+read as more watched than it is. The schema says every `objectives` key must
+also appear in `promises` and cannot enforce it, because JSON Schema has no
+cross-field constraint, so until this rule it was documentation with nothing
+behind it.
+
+Adding these two rules moves the score of every contract written before they
+existed, without any of those factories changing behaviour. That is deliberate
+and it is not the same as editing a contract to turn a finding green: the
+promises really are unwatched, and the new WARN says so where the old silence
+did not. It is a WARN precisely so it reports the gap without gating anything.
+
 ## Practicing on the unsafe example
 
 [`examples/unsafe-factory.yaml`](../examples/unsafe-factory.yaml) is a
 plausible-looking contract carrying six serious defects. It validates cleanly
-and reviews at `6 FAIL, 10 WARN`. See
+and reviews at `6 FAIL, 11 WARN`. See
 [`examples/README.md`](../examples/README.md) for the version of the exercise
 where you find them before the checker does.

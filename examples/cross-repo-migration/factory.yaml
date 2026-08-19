@@ -94,3 +94,14 @@ observability:
     - completed_to_verified
     - verified_to_published
     - published_to_acknowledged
+  # Illustrative, not recommended defaults. A migration fans out across
+  # repositories, so the thresholds that bite are on the transitions a single
+  # slow repository can stall: claim and publish. Measure your own p95 rather
+  # than copying these, or the alarm fires constantly and gets switched off.
+  objectives:
+    ready_to_claim:            {p95: 2h}
+    claimed_to_started:        {p95: 10m}
+    started_to_progress:       {p95: 30m}
+    completed_to_verified:     {p95: 6h}
+    verified_to_published:     {p95: 4h}
+    published_to_acknowledged: {p95: 72h}

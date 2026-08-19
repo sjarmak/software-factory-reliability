@@ -104,3 +104,16 @@ observability:
     - completed_to_verified
     - verified_to_published
     - published_to_acknowledged
+  # The thresholds are what make the promises above a watch rather than a
+  # dashboard: a transition with no number cannot be breached. These are
+  # ILLUSTRATIVE of the shape, not recommended defaults -- copying them into a
+  # factory whose issues take a week means an alarm that fires constantly, and
+  # an alarm that fires constantly gets switched off. Measure your own p95 and
+  # set the number somewhere you would actually want to be told.
+  objectives:
+    ready_to_claim:            {p95: 30m}
+    claimed_to_started:        {p95: 5m}
+    started_to_progress:       {p95: 15m}
+    completed_to_verified:     {p95: 2h}
+    verified_to_published:     {p95: 1h}
+    published_to_acknowledged: {p95: 24h}

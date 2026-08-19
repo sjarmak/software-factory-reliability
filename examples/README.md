@@ -44,7 +44,7 @@ Now run the review.
 python3 src/factory_check.py review examples/unsafe-factory.yaml
 ```
 
-It prints `6 FAIL, 10 WARN` and writes `out/findings.json`.
+It prints `6 FAIL, 11 WARN` and writes `out/findings.json`.
 
 ### The answer key
 
@@ -63,7 +63,7 @@ It prints `6 FAIL, 10 WARN` and writes `out/findings.json`.
 </details>
 
 <details>
-<summary>Ten warnings</summary>
+<summary>Eleven warnings</summary>
 
 | Rule | Contract path | What is undecided |
 | --- | --- | --- |
@@ -77,6 +77,7 @@ It prints `6 FAIL, 10 WARN` and writes `out/findings.json`.
 | `FLEET-003` | `scheduling.fairness.levels` | No fairness levels, so a single tenant or repository can hold the whole pool. |
 | `CODE-000` | `code_estate` | Campaigns are declared with no code estate, so discovery and completion cannot be checked against current repository state. |
 | `OBS-001` | `observability.promises` | Four of the six lifecycle promises are unwatched (`started_to_progress`, `completed_to_verified`, `verified_to_published`, `published_to_acknowledged`), so a stall between any of those states is invisible. |
+| `OBS-002` | `observability.objectives` | The two promises that ARE declared carry no threshold, so neither can be breached. A promise with no number is a dashboard, and a reviewer counting promises reads it as coverage. |
 
 </details>
 

@@ -48,7 +48,7 @@ FAIL AUTH-002
 and the totals line for this contract is:
 
 ```
-6 FAIL, 10 WARN
+6 FAIL, 11 WARN
 ```
 
 Exit status is nonzero on any FAIL. Every rule id maps to a pattern page, and

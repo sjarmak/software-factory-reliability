@@ -512,3 +512,31 @@ def _check_observability(doc, findings):
             prefix + ", ".join(missing) + ".",
             "Watch all six canonical promises so a stall between states is actionable without any component reporting an error.",
             "observability.promises"))
+    if observability is None:
+        return
+    # OBS-001 has already said nothing is watched. Adding "and none of the
+    # transitions you did not declare carry thresholds" is the kind of derived
+    # noise that makes people stop reading a findings list.
+    objectives = observability.get("objectives")
+    objectives = objectives if isinstance(objectives, dict) else {}
+    unwatched = [p for p in declared if p not in objectives]
+    if unwatched:
+        findings.append(Finding(
+            "OBS-002", "WARN",
+            "Promises declared with no objective: " + ", ".join(unwatched) +
+            ". A transition with no threshold cannot be breached, so it is a dashboard rather than a watch, "
+            "and a review that counts promises reads it as coverage.",
+            "Decide a number for each: observability.objectives.<promise> with one percentile and a duration carrying an explicit unit.",
+            "observability.objectives"))
+    # The schema says every objectives key must also appear in promises and
+    # cannot enforce it -- JSON Schema has no cross-field constraint -- so it
+    # was documentation with nothing behind it. This direction is the more
+    # misleading of the two: the contract reads as MORE watched than it is.
+    orphans = [k for k in objectives if k not in declared]
+    if orphans:
+        findings.append(Finding(
+            "OBS-003", "WARN",
+            "Objectives declared for transitions that are not promised: " + ", ".join(sorted(orphans)) +
+            ". A threshold left behind by a withdrawn promise is dead configuration that reads like coverage.",
+            "Either promise the transition or drop its objective; an objective nothing watches is not a watch.",
+            "observability.objectives"))
