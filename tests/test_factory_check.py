@@ -2517,3 +2517,94 @@ def test_an_undecided_code_lane_adds_no_clause(tmp_path):
     messages = _effect_001_messages(tmp_path)
     assert len(messages) == 1, messages
     assert "the code lane carrying" not in messages[0], messages[0]
+
+
+def _install_with_a_record_directory(tmp_path):
+    """A factory whose own written record mentions the command it records.
+
+    `gates/` is the shape that motivated this: 275 completed checklists on a
+    real repository, each with a table row saying a `git status` check had
+    PASSED, quoting the command. `docs/` is an agent instruction, which is the
+    same file format and must NOT be excluded, so the fixture holds both.
+    """
+    root = tmp_path / "install"
+    (root / "bin").mkdir(parents=True)
+    (root / "gates").mkdir(parents=True)
+    (root / "docs").mkdir(parents=True)
+    (root / "bin" / "ship").write_text(
+        "#!/usr/bin/env bash\ngit push origin main\n")
+    for i in range(6):
+        (root / "gates" / ("gate-%d.md" % i)).write_text(
+            "| 5 | Branch clean | PASS | Before writing this gate, `git push "
+            "origin main` had run |\n")
+    (root / "docs" / "AGENTS.md").write_text(
+        "Work is not complete until `git push origin main` succeeds.\n")
+    for cmd in (["git", "init", "-q"],
+                ["git", "config", "user.email", "t@example.invalid"],
+                ["git", "config", "user.name", "t"]):
+        subprocess.run(cmd, cwd=root, check=True, capture_output=True)
+    return root
+
+
+_PROSE_BLOCK = "Every match in these is prose"
+
+
+def _all_prose_names(stdout):
+    """The directory names inside the all-prose block, and nothing else.
+
+    Splitting on the marker and reading the tail was the first version, and
+    codex-review was right that it is a false green: with the block removed,
+    split returns the WHOLE output, whose histogram lists every directory by
+    name, so the assertions still pass. The mutation that was supposed to prove
+    the naming test broke a different test instead, and the difference was
+    invisible from the pass/fail counts alone.
+    """
+    assert _PROSE_BLOCK in stdout, stdout
+    line = stdout.split(_PROSE_BLOCK)[1].splitlines()[1]
+    return {name.strip() for name in line.split(",")}
+
+def test_probes_init_names_the_directories_whose_every_match_is_prose(tmp_path):
+    """Otherwise the advice to exclude output directories cannot be taken.
+
+    The report said "re-run with --exclude <dir> for each that is output" over a
+    flat list of counts. On a real foreign repository the top contributor was
+    `release-gates` at 37 hits, every one a table row in a completed checklist
+    recording that a check had passed, and nothing on the screen distinguished
+    it from `scripts` at 41. A name that reads as machinery, a number that reads
+    as heavy use, and no signal at all.
+
+    Mutation: drop the all-prose block from cmd_probes_init.
+    """
+    root = _install_with_a_record_directory(tmp_path)
+    out = run_cli("probes-init", str(root), "--write", str(tmp_path / "p.yaml"))
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert _all_prose_names(out.stdout) == {"gates", "docs"}, out.stdout
+
+
+def test_probes_init_does_not_name_a_directory_that_holds_executed_matches(tmp_path):
+    """The rail that makes the list mean something.
+
+    A tool that listed every directory would be telling the reader to exclude
+    the scripts that perform the effect, which is the one exclusion that makes
+    the score wrong in the flattering direction. `bin/` holds the only executed
+    call site in the fixture and must never appear.
+
+    Mutation: count a path as prose unconditionally in directory_distribution.
+    """
+    root = _install_with_a_record_directory(tmp_path)
+    out = run_cli("probes-init", str(root), "--write", str(tmp_path / "p.yaml"))
+    assert "bin" not in _all_prose_names(out.stdout), out.stdout
+
+
+def test_probes_init_says_nothing_when_no_directory_is_all_prose(tmp_path):
+    """No finding, no paragraph.
+
+    The block is advice about specific directories; printed over an empty list
+    it becomes a standing warning the reader learns to skip, which is how a
+    real signal gets ignored later.
+
+    Mutation: print the block unconditionally.
+    """
+    root = _tiny_git_install(tmp_path)
+    out = run_cli("probes-init", str(root), "--write", str(tmp_path / "p.yaml"))
+    assert _PROSE_BLOCK not in out.stdout, out.stdout

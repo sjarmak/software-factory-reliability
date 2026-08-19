@@ -610,9 +610,17 @@ def cmd_probes_init(args):
               % (name, item["total"], len(item["paths"])))
 
     print("")
-    print("call sites by top-level directory:")
-    for top, hits in scaffold_mod.directory_distribution(found)[:12]:
-        print("  %-24s %4d" % (top, hits))
+    print("call sites by top-level directory (prose = matches in .md/.rst/.txt):")
+    rows = scaffold_mod.directory_distribution(found)[:12]
+    all_prose = []
+    for top, hits, prose in rows:
+        note = ""
+        if prose == hits:
+            note = "  all prose"
+            all_prose.append(top)
+        elif prose:
+            note = "  %d prose" % prose
+        print("  %-24s %4d%s" % (top, hits, note))
     print("")
     print("Directories your factory WRITES (state, logs, generated reports) "
           "will show up here")
@@ -620,6 +628,22 @@ def cmd_probes_init(args):
           "one and a")
     print("description of one in the other. Re-run with --exclude <dir> for "
           "each that is output.")
+    # Named rather than excluded. An all-prose directory is usually docs, an
+    # archive, or the factory's own written record of past runs -- on the
+    # repository this was measured against, the top contributor was 275
+    # completed gate checklists whose matched lines were table rows saying a
+    # check had PASSED. It is also where a genuine agent instruction lives, so
+    # the tool must not decide. Printing the list is the difference between
+    # advice the reader can act on and advice they cannot.
+    if all_prose:
+        print("")
+        print("Every match in these is prose, so none of them is a route your "
+              "code takes:")
+        print("  %s" % ", ".join(all_prose))
+        print("Some will be agent instructions, which belong in the scan. "
+              "Documentation,")
+        print("archives, and your own gate or run records do not; exclude "
+              "those.")
 
     target = Path(args.write)
     target.parent.mkdir(parents=True, exist_ok=True)

@@ -237,13 +237,34 @@ def directory_distribution(found):
     those apart: the same command in a script is a call site and in a report is
     a description of one. The person who knows which is which is the one
     running the command, so the numbers go to them.
+
+    Returns (directory, hits, prose_hits). The second number is the one that
+    makes the first actionable, and withholding it made this report advice
+    nobody could take. Measured on a foreign repository: `release-gates` was the
+    top contributor at 37 hits, all of them table rows in 275 COMPLETED gate
+    checklists recording that a `git status` check had passed. A record of a
+    past run is not a route, and a reader given only "release-gates 37" has no
+    reason to suspect one -- the name reads as machinery. All-prose is the
+    signature of a directory of documents, and it is the discriminator this
+    module already computes for its own output and never showed.
+
+    Still printed rather than acted on, and for the reason above: a prose file
+    can hold a genuine agent instruction (AGENTS.md on that same repository does)
+    and an executable file can hold a dead one. The split narrows the question
+    from "which of twelve directories" to "these three are entirely prose"; it
+    does not answer it.
     """
-    counts = {}
+    counts, prose_counts = {}, {}
     for item in found.values():
+        _executed, prose = _split_by_execution(item["paths"])
         for rel, hits in item["paths"].items():
             top = rel.split("/")[0]
             counts[top] = counts.get(top, 0) + hits
-    return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+            if rel in prose:
+                prose_counts[top] = prose_counts.get(top, 0) + hits
+    return sorted(((top, hits, prose_counts.get(top, 0))
+                   for top, hits in counts.items()),
+                  key=lambda row: (-row[1], row[0]))
 
 
 # Suffixes whose files are not executed. A command found in one of them was
