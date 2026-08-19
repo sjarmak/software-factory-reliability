@@ -2431,3 +2431,89 @@ def test_reconcile_prints_no_instruction_lines_when_the_lane_is_empty(tmp_path):
             break
         following.append(l)
     assert not [l for l in following if "instruction" in l], following
+
+
+def _effect_001_messages(tmp_path):
+    """The EFFECT-001 messages alone, read from findings.json.
+
+    The three tests below assert on message wording, and asserting a fragment
+    against the whole of stdout lets any other finding satisfy them. codex-review
+    raised it on the round that landed this change: the fragments are unique to
+    EFFECT-001 in rules.py today, so the tests were green for the right reason,
+    and nothing was keeping them that way. Pinning to the rule closes it before
+    it is a debugging session.
+    """
+    findings = json.loads((tmp_path / "findings.json").read_text())
+    return [f["message"] for f in findings if f["rule"] == "EFFECT-001"]
+
+def test_an_undecided_identity_does_not_claim_the_destination_cannot_dedupe(tmp_path):
+    """The finding may describe the contract; it may not describe the city.
+
+    EFFECT-001 read one field and reported a conclusion about the destination:
+    "the destination cannot recognize a repeat". On a contract straight out of
+    infer, every effect is undecided by construction, so it fired once per
+    effect -- including on effects whose every code call site carries the
+    idempotency marker, in a file where the derived comment two lines above said
+    so. The reader who checks one call site catches the tool being wrong about
+    their own installation on the first run they ever do.
+
+    Mutation: put the old clause back on the EFFECT-001 message.
+    """
+    clean = ISSUE_TO_PR.read_text()
+    doc = tmp_path / "no-false-claim.yaml"
+    doc.write_text(clean.replace(
+        "    effect_identity: notification_id",
+        "    effect_identity: unknown", 1))
+    run_cli("review", str(doc), "--out", str(tmp_path))
+    messages = _effect_001_messages(tmp_path)
+    assert len(messages) == 1, messages
+    assert "cannot recognize a repeat" not in messages[0], messages[0]
+    assert "nothing in this contract establishes" in messages[0], messages[0]
+
+
+def test_an_undecided_identity_names_the_code_lane_the_scan_did_observe(tmp_path):
+    """Hand the operator the value, not a scolding.
+
+    The observation is already in the contract -- infer writes code_lane_identity
+    beside the undecided effect_identity precisely so the two answers can differ
+    -- and until now no rule read it, so the one finding an author acts on
+    withheld the one fact that tells them what to write. It is reported as an
+    observation and never as the guarantee: a route that is prose carries
+    whatever the agent types, which is why it did not simply become the answer.
+
+    Mutation: drop the code_lane_identity clause from EFFECT-001.
+    """
+    clean = ISSUE_TO_PR.read_text()
+    doc = tmp_path / "lane-observed.yaml"
+    doc.write_text(clean.replace(
+        "    effect_identity: notification_id",
+        "    effect_identity: unknown\n"
+        "    code_lane_identity: notification_id", 1))
+    run_cli("review", str(doc), "--out", str(tmp_path))
+    messages = _effect_001_messages(tmp_path)
+    assert len(messages) == 1, messages
+    assert "code lane carrying notification_id" in messages[0], messages[0]
+    assert "not a declared guarantee" in messages[0], messages[0]
+
+
+def test_an_undecided_code_lane_adds_no_clause(tmp_path):
+    """`unknown` in the observation field is not an observation.
+
+    _declared() is what keeps this honest: a derived contract writes
+    code_lane_identity: unknown whenever the scan could not settle it, and a
+    clause reading "the scan observed the code lane carrying unknown" would be
+    worse than silence. The field being present is not the same as it saying
+    something.
+
+    Mutation: test the clause on presence (`is not None`) instead of _declared.
+    """
+    clean = ISSUE_TO_PR.read_text()
+    doc = tmp_path / "lane-unknown.yaml"
+    doc.write_text(clean.replace(
+        "    effect_identity: notification_id",
+        "    effect_identity: unknown\n"
+        "    code_lane_identity: unknown", 1))
+    run_cli("review", str(doc), "--out", str(tmp_path))
+    messages = _effect_001_messages(tmp_path)
+    assert len(messages) == 1, messages
+    assert "the code lane carrying" not in messages[0], messages[0]

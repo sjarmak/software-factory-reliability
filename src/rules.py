@@ -231,9 +231,39 @@ def _check_effects(doc, work, findings):
         name = effect.get("name") or path
         identity = effect.get("effect_identity")
         if not _declared(identity):
+            # The old sentence here was "the destination cannot recognize a
+            # repeat", and it asserted a property of the installation this rule
+            # has no way to read. It reads one field of a document. On a
+            # contract straight out of infer, every effect is undecided by
+            # construction, so it fired five times and said the destination
+            # could not recognize a repeat for merge_pull_request -- whose every
+            # code call site carries --match-head-commit, as the same run's own
+            # evidence line states two lines above it in the file it wrote. A
+            # first-time reader who checks one call site catches the tool being
+            # wrong about their city on their first run, and correctly stops
+            # believing the other twenty-three findings.
+            #
+            # What is actually true is a statement about the CONTRACT, and it is
+            # true in every case: nothing here establishes the property. The
+            # severity does not move -- an undecided identity is a real open
+            # boundary, and this is the same reporting-not-scoring line the
+            # instruction lane fix drew.
+            detail = ""
+            lane = effect.get("code_lane_identity")
+            if _declared(lane):
+                # Said only where the scan actually looked. An OBSERVATION,
+                # named as one: the code lane carrying the identity is not the
+                # guarantee effect_identity stands for, because a route that is
+                # prose carries whatever the agent types. Reporting it here is
+                # what makes the finding actionable rather than a scolding --
+                # the operator has the value and needs to decide whether it
+                # holds for every route, which is a judgement no scan can make.
+                detail = (f" The scan observed the code lane carrying {lane}; "
+                          f"that is an observation about the routes it could "
+                          f"read, not a declared guarantee about all of them.")
             findings.append(Finding(
                 "EFFECT-001", "FAIL",
-                f"Effect {name} has no decided effect_identity; the destination cannot recognize a repeat.",
+                f"Effect {name} has no decided effect_identity, so nothing in this contract establishes that a retry is recognizable as a repeat.{detail}",
                 "Give each intended effect a stable logical identity carried unchanged across retries.",
                 f"{path}.effect_identity"))
         # Both places an identity can be written, not just the prose one.
