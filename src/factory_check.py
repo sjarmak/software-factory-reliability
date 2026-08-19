@@ -31,6 +31,7 @@ import infer as infer_mod
 import probe_scaffold as scaffold_mod  # noqa: E402
 import render as render_mod  # noqa: E402
 import rules as rules_mod  # noqa: E402
+from schema_location import describe as describe_location  # noqa: E402
 
 SCHEMA_DIR = SCRIPT_DIR.parent / "schemas"
 
@@ -153,7 +154,7 @@ def _validate_one(path, cache):
     if errors:
         print(f"{path}: INVALID against {schema_name}")
         for err in errors:
-            location = ".".join(str(part) for part in err.absolute_path) or "(document root)"
+            location = describe_location(doc, err.absolute_path)
             print(f"  at {location}: {err.message}")
         return "invalid"
     print(f"{path}: OK ({schema_name})")
@@ -199,7 +200,7 @@ def _load_valid_contract(file_arg):
     if errors:
         print(f"{path}: not a valid factory contract; run validate for details")
         for err in errors[:5]:
-            location = ".".join(str(part) for part in err.absolute_path) or "(document root)"
+            location = describe_location(doc, err.absolute_path)
             print(f"  at {location}: {err.message}")
         return None
     return doc

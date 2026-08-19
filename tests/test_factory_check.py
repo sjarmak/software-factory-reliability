@@ -2840,3 +2840,114 @@ def test_probes_init_says_nothing_when_no_directory_is_all_prose(tmp_path):
     root = _tiny_git_install(tmp_path)
     out = run_cli("probes-init", str(root), "--write", str(tmp_path / "p.yaml"))
     assert _PROSE_BLOCK not in out.stdout, out.stdout
+
+
+INVALID_NAMED_EFFECTS = """\
+version: 1
+factory: x
+effects:
+  - name: slack_publish
+  - destination: nowhere
+"""
+
+
+def _validate_invalid_named(tmp_path):
+    target = tmp_path / "b.yaml"
+    target.write_text(INVALID_NAMED_EFFECTS)
+    result = run_cli("validate", str(target))
+    assert result.returncode == 1, result.stdout
+    return result.stdout
+
+
+def test_validate_names_the_effect_an_indexed_location_selects(tmp_path):
+    """An ordinal is not a locator: the author greps for the name, not for "0".
+
+    jsonschema reports ``effects.0``, a number that appears nowhere in the
+    file being validated. Every location that selects a named item must carry
+    that item's name so the author can find the line.
+    """
+    stdout = _validate_invalid_named(tmp_path)
+    zero_lines = [ln for ln in stdout.splitlines() if ln.startswith("  at effects.0")]
+    assert zero_lines, stdout
+    for line in zero_lines:
+        assert "(name=slack_publish)" in line, line
+
+
+def test_validate_leaves_an_unnamed_item_a_bare_ordinal(tmp_path):
+    """Do not label an item the file does not name.
+
+    The second effect has no ``name``. Printing an invented or borrowed label
+    there would send the author to the wrong list item, which is worse than
+    the ordinal it replaced.
+    """
+    stdout = _validate_invalid_named(tmp_path)
+    one_lines = [ln for ln in stdout.splitlines() if ln.startswith("  at effects.1")]
+    assert one_lines, stdout
+    for line in one_lines:
+        assert line.startswith("  at effects.1:"), line
+        assert "slack_publish" not in line, line
+
+
+def test_validate_root_and_scalar_locations_are_unchanged(tmp_path):
+    """The naming applies to indexed items only; other locations keep their shape."""
+    stdout = _validate_invalid_named(tmp_path)
+    assert "  at factory: " in stdout, stdout
+    assert "  at version: " in stdout, stdout
+
+
+def test_review_names_the_effect_when_it_rejects_a_contract(tmp_path):
+    """The second print site (review's load path) must not diverge from validate."""
+    target = tmp_path / "b.yaml"
+    target.write_text(INVALID_NAMED_EFFECTS)
+    result = run_cli("review", str(target))
+    assert result.returncode != 0, result.stdout
+    assert "(name=slack_publish)" in result.stdout, result.stdout
+
+
+def test_a_name_cannot_forge_a_second_finding_line(tmp_path):
+    """A contract value reaching the terminal must not be able to add a line.
+
+    The schema accepts a newline inside a name. Spliced raw, an effect named
+    ``slack\\n  at version`` prints a line that reads as another finding's
+    location -- the tool reporting what the contract said as though it were
+    what the tool found. This is the same hole ``_one_line`` closes for the
+    message half; it reopens at every new site a contract value is printed.
+    """
+    target = tmp_path / "inj.yaml"
+    target.write_text(
+        'version: 1\nfactory: x\neffects:\n  - name: "slack\\n  at version"\n')
+    result = run_cli("validate", str(target))
+    assert result.returncode == 1, result.stdout
+    at_lines = [ln for ln in result.stdout.splitlines() if ln.startswith("  at ")]
+    assert at_lines, result.stdout
+    for line in at_lines:
+        # Every printed location line must carry its own message. A forged
+        # line has the location and nothing after it.
+        assert ": " in line[len("  at "):], line
+    # And the spliced value is present, flattened, on the line it belongs to
+    # rather than having become a line of its own.
+    assert "(name=slack at version)" in result.stdout, result.stdout
+
+
+def test_a_location_label_does_not_move_the_message_split(tmp_path):
+    """``  at <location>: <message>`` is split on the first ``": "``.
+
+    A colon inside the label silently reassigns which half is the path and
+    which is the message, so the label uses ``key=value``.
+    """
+    stdout = _validate_invalid_named(tmp_path)
+    line = next(ln for ln in stdout.splitlines() if ln.startswith("  at effects.0"))
+    location, _, message = line[len("  at "):].partition(": ")
+    assert location == "effects.0 (name=slack_publish)", location
+    assert message.startswith("'"), message
+
+
+def test_a_location_keeps_its_ordinal_when_names_collide(tmp_path):
+    """Two effects may share a name; the ordinal is what still separates them."""
+    target = tmp_path / "dup.yaml"
+    target.write_text(
+        "version: 1\nfactory: x\neffects:\n  - name: dup\n  - name: dup\n")
+    result = run_cli("validate", str(target))
+    assert result.returncode == 1, result.stdout
+    assert "  at effects.0 (name=dup)" in result.stdout, result.stdout
+    assert "  at effects.1 (name=dup)" in result.stdout, result.stdout
