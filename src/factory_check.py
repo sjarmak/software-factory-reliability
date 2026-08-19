@@ -748,6 +748,27 @@ def _check_declared_observations(effect, item, name, out):
             % (declared_lane.strip(), scanned_lane)))
 
 
+def _print_set_aside(item):
+    """Name the matches whose reason string told the reader to exclude them.
+
+    Derive already prints these; reconcile did not, and reconcile is the
+    command that runs on a schedule and sets the exit code. So the reader who
+    only ever sees reconcile got "exclude the ones that are not invocations
+    with not_regex in the probe pack" and no way to find out which ones. The
+    matched text goes on the line for the same reason it does in derive: the
+    reader's job here is to decide whether the line is an invocation at all,
+    and a path and a line number cannot tell them that.
+
+    Reporting only. Nothing here changes a verdict -- see
+    EffectEvidence.unclassified for why setting them aside must not.
+    """
+    if item is None:
+        return
+    for site in item.unclassified:
+        print("         review (%s): %s:%d  %s"
+              % (site.set_aside, site.path, site.line, site.text[:70]))
+
+
 def cmd_reconcile(args):
     """Report every place the declaration claims more than the installation shows.
 
@@ -878,6 +899,15 @@ def cmd_reconcile(args):
     for name, claimed, reason in drift:
         print("DRIFT  %s: contract says effect_identity %s; installation says %s"
               % (name, claimed, reason))
+        _print_set_aside(by_name.get(name))
+    # No _print_set_aside here, and the omission is the point. Each of the four
+    # ways an effect reaches UNVERIFIED excludes set-aside matches by
+    # construction: no probe covers it (there is no evidence object at all);
+    # every site is an agent instruction (unclassified reads scripted + fenced,
+    # so it is empty); or the code lane derived a DECIDED identity, which
+    # code_lane_identity only returns when unclassified is empty. Calling it
+    # here would be a branch that can never be taken, which reads as coverage
+    # and is not.
     for name, note in unverifiable:
         print("UNVERIFIED  %s: %s" % (name, note))
     for name, claimed, reason in confirmed:
@@ -894,6 +924,7 @@ def cmd_reconcile(args):
               "checkable" % name)
     for name, reason in open_items:
         print("OPEN  %s: undecided in the contract and %s" % (name, reason))
+        _print_set_aside(by_name.get(name))
     for name, reason in undeclared:
         print("UNDECLARED  %s: %s" % (name, reason))
     for name, label, reason in stale_observations:

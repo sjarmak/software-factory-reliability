@@ -2165,3 +2165,95 @@ def test_cites_names_the_file_each_inference_chose(tmp_path):
     assert result.returncode == 0, result.stdout
     assert "INFERRED" in result.stdout
     assert "first/main.go" in result.stdout and "main.go:20" in result.stdout
+
+
+def _lanes_install_with_a_mention(tmp_path):
+    """The lanes installation, plus one line that names the verb without calling it.
+
+    A shell diagnostic that names the command it wraps is the normal shape of a
+    fenced wrapper, not an edge case, so this is what a real installation looks
+    like rather than a contrived input.
+    """
+    contract, probes, root = _lanes_install(tmp_path)
+    (root / "bin" / "publish").write_text(
+        "#!/usr/bin/env bash\n"
+        "slack_post --idempotency-key \"$KEY\" \"$MSG\"\n"
+        "echo \"warn: slack_post failed; nothing was sent\" >&2\n")
+    return contract, probes, root
+
+
+def test_reconcile_names_the_matches_it_tells_you_to_exclude(tmp_path):
+    """The instruction has to be followable from the output that gives it.
+
+    Reconcile's reason string ends "exclude the ones that are not invocations
+    with not_regex in the probe pack" and used to name none of them. Derive
+    printed the paths; reconcile is the command run on a schedule and the one
+    whose exit code gates, so a reader who only ever sees reconcile was told to
+    go edit something and not told what. The locations alone are not enough
+    either: the reader's job is to decide whether each line is an invocation,
+    which needs the matched text.
+
+    Mutation: delete the _print_set_aside call under the DRIFT loop in
+    cmd_reconcile. The reason string still says "1 match(es) set aside" and
+    every other assertion in this file still passes.
+    """
+    contract, probes, root = _lanes_install_with_a_mention(tmp_path)
+    out = run_cli("reconcile", str(contract), str(root), "--probes", str(probes))
+    drift = [l for l in out.stdout.splitlines() if l.startswith("DRIFT  slack_publish")]
+    assert drift, out.stdout
+    assert "1 match(es) set aside for review" in drift[0]
+    review = [l for l in out.stdout.splitlines() if "review (" in l]
+    assert len(review) == 1, out.stdout
+    assert "bin/publish:3" in review[0]
+    assert "inside a quoted string" in review[0]
+    # The matched text, because the location cannot tell the reader whether the
+    # line is a call.
+    assert "warn: slack_post failed" in review[0]
+
+
+def test_reconcile_prints_no_review_block_when_nothing_was_set_aside(tmp_path):
+    """The other rail. A clean installation must not grow a heading with
+    nothing under it, or the block stops being a signal."""
+    contract, probes, root = _lanes_install(tmp_path)
+    out = run_cli("reconcile", str(contract), str(root), "--probes", str(probes))
+    assert not [l for l in out.stdout.splitlines() if "review (" in l], out.stdout
+
+
+OPEN_CONTRACT = """\
+version: factory.reliability/v1
+factory:
+  name: lanes
+effects:
+  - name: slack_publish
+    destination: messaging
+    # The schema requires the field, so "undecided" is spelled, not omitted --
+    # which is the only way an effect reaches OPEN.
+    effect_identity: unknown
+    retry_contract: deduplicate
+    unknown_state_policy: block_and_escalate
+"""
+
+
+def test_reconcile_names_the_set_aside_matches_on_an_open_effect_too(tmp_path):
+    """OPEN is the other verdict a set-aside match can reach, and it is the
+    worse one to leave bare.
+
+    An effect nobody has decided yet, whose call sites include a line the
+    scanner could not read as an invocation, is precisely the case where the
+    reader is about to WRITE the contract entry. Telling them a match was set
+    aside and not which one sends them to write a claim over evidence they
+    cannot see.
+
+    Mutation: delete the _print_set_aside call under the OPEN loop. Every other
+    test in this file stays green, including both rails of the DRIFT one.
+    """
+    contract, probes, root = _lanes_install_with_a_mention(tmp_path)
+    contract.write_text(OPEN_CONTRACT)
+    out = run_cli("reconcile", str(contract), str(root), "--probes", str(probes))
+    line = [l for l in out.stdout.splitlines() if l.startswith("OPEN  slack_publish")]
+    assert line, out.stdout
+    assert "1 match(es) set aside for review" in line[0]
+    review = [l for l in out.stdout.splitlines() if "review (" in l]
+    assert len(review) == 1, out.stdout
+    assert "bin/publish:3" in review[0]
+    assert "warn: slack_post failed" in review[0]
