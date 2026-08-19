@@ -137,6 +137,63 @@ class EffectEvidence:
         ]
 
     @property
+    def instructed_unclassified(self):
+        """Instruction-lane matches that are not readable as invocations.
+
+        The same shell-quoting walk runs over every lane, so these were already
+        being computed and were reported nowhere. That matters more here than on
+        the scripted lane, because the dominant shape in this one is not a
+        deferred command, it is a PROHIBITION: a prompt or a work template naming
+        the verb in order to forbid it.
+
+            **Polecats NEVER run `<the pr merge verb>`** on any path.
+            **Critical:** This step MUST NOT run `git push`.
+            - **No external artifacts.** No `git push`, ...
+
+        EFFECT-006 fails on any nonzero instructed count, so counting those
+        scores a city WORSE for writing its policy down, and a city with no
+        policy at all scores better than one whose prompts forbid the verb in six
+        places. That is backwards, and it is the reason these are surfaced.
+
+        What it must not become is a rule that drops them. "NEVER run a bare
+        push, use the fenced wrapper" both forbids and instructs, so no pattern
+        decides this correctly, and a pattern that tried would be a guard that
+        can only ever improve a score -- the thing unclassified above exists to
+        refuse. So this changes nothing about the count: it names the lines, and
+        leaves `not_regex` in the probe pack as the reader's deliberate,
+        reviewable way to exclude one.
+        """
+        return [s for s in self.instructed if s.set_aside and not s.has_identity]
+
+    @property
+    def instructed_plain(self):
+        """Instruction-lane matches that do read as a direction to perform it.
+
+        The residual after the two properties below, and the group a reader is
+        actually being asked about when EFFECT-006 fails. Printed rather than
+        merely counted because the count alone is not something anyone can act
+        on: the finding's own remedy is a `not_regex` in the probe pack, and that
+        cannot be written against a list nobody can see.
+        """
+        return [s for s in self.instructed
+                if not s.set_aside and not s.has_identity]
+
+    @property
+    def instructed_with_marker(self):
+        """Instruction-lane sites that spell out the identity marker anyway.
+
+        The count's own schema description says it is "NOT a claim that they omit
+        it", and these are the sites where we can see that it does not: a work
+        template that writes the whole command out, pinning flag included.
+
+        Reported, and deliberately NOT subtracted from the count. A literal
+        command in a prompt is a template an agent may edit before running, so it
+        is weaker evidence than a scripted site, and letting it reduce the
+        residual would improve a score on the strength of prose.
+        """
+        return [s for s in self.instructed if s.has_identity]
+
+    @property
     def missing_identity(self):
         """Sites that should carry the declared marker and do not.
 

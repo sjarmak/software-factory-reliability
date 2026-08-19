@@ -2193,7 +2193,7 @@ def test_reconcile_names_the_matches_it_tells_you_to_exclude(tmp_path):
     either: the reader's job is to decide whether each line is an invocation,
     which needs the matched text.
 
-    Mutation: delete the _print_set_aside call under the DRIFT loop in
+    Mutation: delete the _print_review_lines call under the DRIFT loop in
     cmd_reconcile. The reason string still says "1 match(es) set aside" and
     every other assertion in this file still passes.
     """
@@ -2244,7 +2244,7 @@ def test_reconcile_names_the_set_aside_matches_on_an_open_effect_too(tmp_path):
     aside and not which one sends them to write a claim over evidence they
     cannot see.
 
-    Mutation: delete the _print_set_aside call under the OPEN loop. Every other
+    Mutation: delete the _print_review_lines call under the OPEN loop. Every other
     test in this file stays green, including both rails of the DRIFT one.
     """
     contract, probes, root = _lanes_install_with_a_mention(tmp_path)
@@ -2257,3 +2257,177 @@ def test_reconcile_names_the_set_aside_matches_on_an_open_effect_too(tmp_path):
     assert len(review) == 1, out.stdout
     assert "bin/publish:3" in review[0]
     assert "warn: slack_post failed" in review[0]
+
+
+# The contract for the lanes install with merge_pull_request's count declared,
+# so the STALE rail is live and a test can prove what does and does not move it.
+THREE_SHAPES_CONTRACT = """\
+version: factory.reliability/v1
+factory:
+  name: lanes
+effects:
+  - name: slack_publish
+    destination: messaging
+    effect_identity: idempotency_key
+    retry_contract: deduplicate
+    unknown_state_policy: block_and_escalate
+  - name: merge_pull_request
+    destination: code_host
+    effect_identity: pr_head_sha
+    retry_contract: converge
+    unknown_state_policy: block_and_escalate
+    instructed_call_sites: 3
+"""
+
+# The three shapes an instruction-lane match comes in, one line each, in a file
+# that carries nothing else. Real prompt files mix them; separating them is what
+# lets a count assertion mean something.
+THREE_SHAPES = (
+    'prompt = """\n'
+    'Run gh pr merge once the checks are green.\n'
+    'echo "gh pr merge is banned on this path"\n'
+    'gh pr merge "$PR" --match-head-commit "$SHA"\n'
+    '"""\n')
+
+
+def _three_instruction_shapes(tmp_path, formula=THREE_SHAPES):
+    """The lanes install whose instruction lane holds a plain direction, a
+    prohibition the scanner cannot read as a call, and a literal command that
+    spells the identity marker out.
+
+    merge_pull_request has no scripted site here, so it reaches UNVERIFIED --
+    the verdict that printed nothing at all before, and the one an agent-driven
+    factory hits most.
+    """
+    contract, probes, root = _lanes_install(tmp_path)
+    contract.write_text(THREE_SHAPES_CONTRACT)
+    (root / "formulas" / "ship.toml").write_text(formula)
+    return contract, probes, root
+
+
+def test_reconcile_names_the_instruction_sites_behind_an_unverified_verdict(tmp_path):
+    """The count EFFECT-006 fails on has to be readable as lines.
+
+    UNVERIFIED means every route to the effect is prose, so the instructed count
+    IS the whole finding, and it was the one verdict that printed no locations of
+    any kind. The remedy the tool offers for a miscounted lane is a not_regex in
+    the probe pack, and nobody can write one against a number.
+
+    Mutation: delete the _print_review_lines call under the `unverifiable` loop
+    in cmd_reconcile. The UNVERIFIED line still reports "all 3 call site(s) are
+    agent instructions" and every other test in this file stays green.
+    """
+    contract, probes, root = _three_instruction_shapes(tmp_path)
+    out = run_cli("reconcile", str(contract), str(root), "--probes", str(probes))
+    line = [l for l in out.stdout.splitlines()
+            if l.startswith("UNVERIFIED  merge_pull_request")]
+    assert line, out.stdout
+    assert "all 3 call site(s) are agent instructions" in line[0]
+
+    plain = [l for l in out.stdout.splitlines() if "instruction: " in l]
+    assert len(plain) == 1, out.stdout
+    assert "formulas/ship.toml:2" in plain[0]
+    # The matched text, for the same reason the scripted lane carries it: the
+    # reader is deciding whether this line is a direction to act, and a path
+    # cannot tell them.
+    assert "Run gh pr merge once the checks are green." in plain[0]
+
+
+def test_reconcile_separates_a_prohibition_it_could_not_read_from_a_direction(tmp_path):
+    """A line naming the verb in order to forbid it still counts, and says so.
+
+    This is the dominant shape in the lane: prompts and work templates that name
+    a command to ban it. The count cannot drop them -- a rule that did would be a
+    guard that can only ever improve a score, and "never run the bare push, use
+    the wrapper" both forbids and instructs, so no pattern decides it. What the
+    reader gets instead is the line, its reason, and its text.
+
+    Mutation: change instructed_unclassified to return [] in infer.py. The
+    UNVERIFIED count stays 3, EFFECT-006 still fails, and only this assertion
+    moves -- which is the point being fixed, stated as a test.
+    """
+    contract, probes, root = _three_instruction_shapes(tmp_path)
+    out = run_cli("reconcile", str(contract), str(root), "--probes", str(probes))
+    review = [l for l in out.stdout.splitlines() if "review, instruction (" in l]
+    assert len(review) == 1, out.stdout
+    assert "inside a quoted string" in review[0]
+    assert "formulas/ship.toml:3" in review[0]
+    assert "banned on this path" in review[0]
+
+
+def test_reconcile_reports_an_instruction_that_spells_the_marker_out(tmp_path):
+    """A work template writing the whole command out is evidence, and it is
+    weaker evidence than code.
+
+    The field's own schema text says a nonzero count is "NOT a claim that they
+    omit it", and this is the case where we can see that it does not. It is
+    reported and deliberately not subtracted: a literal command in a prompt is a
+    template an agent may edit before running, so letting it reduce the residual
+    would improve a score on the strength of prose. The count assertion below is
+    that non-subtraction.
+
+    Mutation: return `s.has_identity` sites from instructed_plain as well. The
+    site is then printed twice, the count is unchanged, and this test catches it.
+    """
+    contract, probes, root = _three_instruction_shapes(tmp_path)
+    out = run_cli("reconcile", str(contract), str(root), "--probes", str(probes))
+    spelled = [l for l in out.stdout.splitlines() if "instruction spells out " in l]
+    assert len(spelled) == 1, out.stdout
+    assert "--match-head-commit" in spelled[0]
+    assert "formulas/ship.toml:4" in spelled[0]
+    # Not subtracted: the declared 3 still matches the scan, so no STALE.
+    assert not [l for l in out.stdout.splitlines()
+                if l.startswith("STALE") and "merge_pull_request" in l], out.stdout
+
+
+def test_the_instruction_count_does_not_move_when_a_site_becomes_set_aside(tmp_path):
+    """The mutation that proves the score cannot be improved by the new reporting.
+
+    Three installations, identical except for how the middle line is written: as
+    a prohibition inside quotes (set aside), as a plain sentence (readable), and
+    with the identity marker spelled out. The declared 3 holds against all three,
+    so no reordering of a line between the three groups can quiet a finding. That
+    is the property that makes this change reporting-only, and it is the one that
+    would break first if a later "clean this up" patch taught a group to subtract.
+    """
+    variants = {
+        "set aside": THREE_SHAPES,
+        "plain": THREE_SHAPES.replace(
+            'echo "gh pr merge is banned on this path"',
+            'Do not gh pr merge on this path.'),
+        "marked": THREE_SHAPES.replace(
+            'echo "gh pr merge is banned on this path"',
+            'gh pr merge --match-head-commit "$OTHER"'),
+    }
+    for label, formula in variants.items():
+        root_dir = tmp_path / label.replace(" ", "_")
+        root_dir.mkdir()
+        contract, probes, root = _three_instruction_shapes(root_dir, formula)
+        out = run_cli("reconcile", str(contract), str(root), "--probes", str(probes))
+        assert not [l for l in out.stdout.splitlines() if l.startswith("STALE")], \
+            "%s: %s" % (label, out.stdout)
+        line = [l for l in out.stdout.splitlines()
+                if l.startswith("UNVERIFIED  merge_pull_request")]
+        assert line, "%s: %s" % (label, out.stdout)
+        assert "all 3 call site(s) are agent instructions" in line[0], label
+
+
+def test_reconcile_prints_no_instruction_lines_when_the_lane_is_empty(tmp_path):
+    """The other rail. An effect performed only in code must not grow a group
+    heading with nothing under it, or the block stops being a signal.
+
+    slack_publish here has a scripted site and no instructed one, and it is in
+    the same run as merge_pull_request, whose three lines do print -- so this
+    asserts the absence is a property of the effect and not of the run.
+    """
+    contract, probes, root = _three_instruction_shapes(tmp_path)
+    out = run_cli("reconcile", str(contract), str(root), "--probes", str(probes))
+    lines = out.stdout.splitlines()
+    slack = [i for i, l in enumerate(lines) if l.startswith("CONFIRMED  slack_publish")]
+    assert slack, out.stdout
+    following = []
+    for l in lines[slack[0] + 1:]:
+        if not l.startswith("         "):
+            break
+        following.append(l)
+    assert not [l for l in following if "instruction" in l], following

@@ -534,9 +534,7 @@ def cmd_infer(args):
         # Printed under their own heading, with the matched text, because the
         # reader's job on these is to decide whether each one is an invocation
         # at all -- which the location alone cannot tell them.
-        for site in item.unclassified:
-            print("         review (%s): %s:%d  %s"
-                  % (site.set_aside, site.path, site.line, site.text[:70]))
+        _print_review_lines(item)
 
     # Render the contract BEFORE writing anything. The emitter can refuse --
     # an unclassified schema section, an unreadable schema, a field derive()
@@ -748,25 +746,50 @@ def _check_declared_observations(effect, item, name, out):
             % (declared_lane.strip(), scanned_lane)))
 
 
-def _print_set_aside(item):
-    """Name the matches whose reason string told the reader to exclude them.
+def _print_review_lines(item):
+    """Name every match the reader has to judge, in both lanes.
 
-    Derive already prints these; reconcile did not, and reconcile is the
-    command that runs on a schedule and sets the exit code. So the reader who
-    only ever sees reconcile got "exclude the ones that are not invocations
-    with not_regex in the probe pack" and no way to find out which ones. The
-    matched text goes on the line for the same reason it does in derive: the
-    reader's job here is to decide whether the line is an invocation at all,
-    and a path and a line number cannot tell them that.
+    Derive already printed the scripted lane's set-aside matches; reconcile did
+    not, and reconcile is the command that runs on a schedule and sets the exit
+    code, so the reader who only ever sees reconcile got "exclude the ones that
+    are not invocations with not_regex in the probe pack" and no way to find out
+    which ones. Both commands call this now rather than keeping a loop each,
+    because the two drifting apart is what produced that gap in the first place.
 
-    Reporting only. Nothing here changes a verdict -- see
-    EffectEvidence.unclassified for why setting them aside must not.
+    The instruction lane had the same gap one level worse: not one line of it was
+    ever printed anywhere, only counted. EFFECT-006 fails on that count, so a
+    reader was handed a failure over 34 sites with no way to see one of them, and
+    `not_regex` -- the lever the scripted lane's own message names -- cannot be
+    written against a list nobody can read. Every instructed site prints, sorted
+    into what it is, because that partition is the whole judgement being asked
+    for:
+
+      instruction              readable as a direction to perform the effect
+      review, instruction      not readable as an invocation at all
+      instruction spells out   a literal command carrying the identity marker
+
+    The matched text goes on every line: the reader's job here is to decide
+    whether the line is an invocation at all, and a path and a line number cannot
+    tell them that.
+
+    Reporting only. Nothing here changes a verdict or a count -- see
+    EffectEvidence.unclassified and .instructed_unclassified for why setting a
+    match aside must not, and why the instruction lane needs it most.
     """
     if item is None:
         return
     for site in item.unclassified:
         print("         review (%s): %s:%d  %s"
               % (site.set_aside, site.path, site.line, site.text[:70]))
+    for site in item.instructed_plain:
+        print("         instruction: %s:%d  %s"
+              % (site.path, site.line, site.text[:70]))
+    for site in item.instructed_unclassified:
+        print("         review, instruction (%s): %s:%d  %s"
+              % (site.set_aside, site.path, site.line, site.text[:70]))
+    for site in item.instructed_with_marker:
+        print("         instruction spells out %s: %s:%d  %s"
+              % (site.identity_evidence, site.path, site.line, site.text[:70]))
 
 
 def cmd_reconcile(args):
@@ -899,19 +922,23 @@ def cmd_reconcile(args):
     for name, claimed, reason in drift:
         print("DRIFT  %s: contract says effect_identity %s; installation says %s"
               % (name, claimed, reason))
-        _print_set_aside(by_name.get(name))
-    # No _print_set_aside here, and the omission is the point. Each of the four
-    # ways an effect reaches UNVERIFIED excludes set-aside matches by
-    # construction: no probe covers it (there is no evidence object at all);
-    # every site is an agent instruction (unclassified reads scripted + fenced,
-    # so it is empty); or the code lane derived a DECIDED identity, which
-    # code_lane_identity only returns when unclassified is empty. Calling it
-    # here would be a branch that can never be taken, which reads as coverage
-    # and is not.
+        _print_review_lines(by_name.get(name))
+    # Every verdict prints its review lines, and the reasoning that used to
+    # exempt two of them is recorded here because it was correct and stopped
+    # being so. It held for the SCRIPTED lane only: unclassified reads scripted
+    # + fenced, an effect with no code has none, and a decided identity requires
+    # it to be empty, so those calls really were branches that could never fire.
+    # None of that constrains the instruction lane. An effect performed only by
+    # prose is precisely the UNVERIFIED case, and an effect whose code is clean
+    # is precisely the case where EFFECT-006 is the only finding left -- the two
+    # verdicts where a reader most needs to see which lines produced the count,
+    # and the two that were silent.
     for name, note in unverifiable:
         print("UNVERIFIED  %s: %s" % (name, note))
+        _print_review_lines(by_name.get(name))
     for name, claimed, reason in confirmed:
         print("CONFIRMED  %s: effect_identity %s, %s" % (name, claimed, reason))
+        _print_review_lines(by_name.get(name))
     for name in confirmed_on_key:
         # A static scan can check that every call site carries the token the
         # contract named. It cannot check that the token's runtime VALUE is the
@@ -924,7 +951,7 @@ def cmd_reconcile(args):
               "checkable" % name)
     for name, reason in open_items:
         print("OPEN  %s: undecided in the contract and %s" % (name, reason))
-        _print_set_aside(by_name.get(name))
+        _print_review_lines(by_name.get(name))
     for name, reason in undeclared:
         print("UNDECLARED  %s: %s" % (name, reason))
     for name, label, reason in stale_observations:
