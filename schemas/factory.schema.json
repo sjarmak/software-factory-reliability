@@ -313,6 +313,24 @@
             "description": "Name of one lifecycle transition promise."
           },
           "description": "Lifecycle transitions watched end to end. The canonical six: ready_to_claim, claimed_to_started, started_to_progress, completed_to_verified, verified_to_published, published_to_acknowledged. The review rules list any of the six that are missing."
+        },
+        "objectives": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "minProperties": 1,
+            "maxProperties": 1,
+            "patternProperties": {
+              "^p(100|[1-9][0-9]?(\\.[0-9]+)?)$": {
+                "type": "string",
+                "pattern": "^[0-9]+(\\.[0-9]+)?[smhd]$",
+                "description": "The threshold, as a duration with an explicit unit: s, m, h or d. A bare number is refused rather than assumed to be seconds -- an objective is written once and re-read rarely, and a threshold whose unit was guessed fires constantly and gets switched off."
+              }
+            },
+            "description": "Exactly one percentile and its threshold. Two thresholds on one transition are two objectives and need two entries, so each can be reported separately."
+          },
+          "description": "The threshold each promise is watched against, keyed by promise name. Optional, and a promise without one is a dashboard rather than a watch: nothing can be breached. Every key here must also appear in promises -- an objective left behind by a withdrawn promise is dead configuration that reads like coverage."
         }
       }
     }

@@ -9,6 +9,8 @@ import json
 import re
 import subprocess
 import sys
+
+import pytest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -1409,3 +1411,94 @@ def test_omitting_campaigns_scores_better_than_declaring_it(tmp_path):
     # The point, stated as a comparison so a change in the starter's other
     # sections cannot make this pass for the wrong reason.
     assert counts(omitted) < counts(declared)
+
+
+# --- observability.objectives (2026-08-19) -------------------------------
+#
+# The schema carried `promises` and nothing else, so a contract could say it
+# WATCHES a transition and never say what it watches it against. A promise with
+# no threshold cannot be breached, which makes it a dashboard rather than a
+# watch, and a watch that cannot go red is the defect this whole kit is about.
+#
+# The unit is the part that has to be enforced rather than documented. An
+# objective is written once and re-read rarely; `p90: 7` silently meaning seven
+# SECONDS instead of seven days would fire on every reading, and an alarm that
+# fires constantly gets switched off. So the schema requires an explicit suffix
+# and refuses a bare number.
+
+def _with_objectives(tmp_path, block, name="obj.yaml"):
+    """A schema-valid contract carrying one observability block."""
+    import yaml
+    doc = yaml.safe_load((EXAMPLES / "minimal-factory.yaml").read_text())
+    doc["observability"] = block
+    path = tmp_path / name
+    path.write_text(yaml.safe_dump(doc))
+    return path
+
+
+def test_objectives_validate_alongside_promises(tmp_path):
+    path = _with_objectives(tmp_path, {
+        "promises": ["started_to_progress", "published_to_acknowledged"],
+        "objectives": {"started_to_progress": {"p90": "4d"},
+                       "published_to_acknowledged": {"p99": "36h"}},
+    })
+    result = run_cli("validate", str(path))
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_promises_without_objectives_still_validate(tmp_path):
+    # Optional, deliberately. Making it required would invalidate every
+    # contract written before this field existed, including the two examples
+    # in this repo, and a schema break is a worse outcome than an undeclared
+    # threshold. The gap is reported by the watch, not by the schema.
+    path = _with_objectives(tmp_path, {"promises": ["started_to_progress"]})
+    assert run_cli("validate", str(path)).returncode == 0
+
+
+BAD_OBJECTIVES = {
+    # A bare number: the unit would be a guess, and the guess is the bug.
+    "bare_number": {"p90": 7},
+    "bare_numeric_string": {"p90": "7"},
+    # A unit spelled out is not one of s/m/h/d.
+    "spelled_unit": {"p90": "36 hours"},
+    "unknown_unit": {"p90": "36w"},
+    # Two thresholds in one entry: they are two objectives and would be
+    # reported as one, so whichever the reader's parser happened to pick would
+    # be the one enforced.
+    "two_percentiles": {"p90": "4d", "p99": "9d"},
+    # No threshold at all.
+    "empty": {},
+    # A key that is not pNN.
+    "not_a_percentile": {"ninety": "4d"},
+    "out_of_range_low": {"p0": "4d"},
+    "out_of_range_high": {"p101": "4d"},
+    # A negative duration.
+    "negative": {"p90": "-4d"},
+}
+
+
+@pytest.mark.parametrize("case", sorted(BAD_OBJECTIVES))
+def test_a_malformed_objective_is_refused_by_the_schema(tmp_path, case):
+    path = _with_objectives(tmp_path,
+                            {"promises": ["started_to_progress"],
+                             "objectives": {"started_to_progress": BAD_OBJECTIVES[case]}},
+                            name=f"{case}.yaml")
+    result = run_cli("validate", str(path))
+    assert result.returncode != 0, (
+        f"{case} validated; the schema accepts an objective it cannot enforce\n"
+        + result.stdout + result.stderr)
+
+
+def test_an_objective_block_that_is_not_a_mapping_is_refused(tmp_path):
+    path = _with_objectives(tmp_path, {"promises": ["started_to_progress"],
+                                       "objectives": ["p90: 4d"]})
+    assert run_cli("validate", str(path)).returncode != 0
+
+
+def test_an_unknown_key_under_observability_is_still_refused(tmp_path):
+    # additionalProperties stays false. Adding `objectives` widened the schema
+    # by exactly one key; the mutation this catches is widening it to anything,
+    # which would silently accept a misspelled `objective` and enforce nothing.
+    path = _with_objectives(tmp_path, {"promises": ["started_to_progress"],
+                                       "objective": {"started_to_progress": {"p90": "4d"}}})
+    assert run_cli("validate", str(path)).returncode != 0
