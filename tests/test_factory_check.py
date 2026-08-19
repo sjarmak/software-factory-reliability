@@ -102,6 +102,116 @@ def test_review_unsafe_golden_rule_multiset(tmp_path):
                      "RECON-001", "RECON-001", "RECON-002"]
 
 
+def _printed_paths(stdout):
+    """The `at <path>` lines, in printed order.
+
+    Read as a list rather than a set on purpose: the unsafe fixture prints two
+    RECON-001 findings whose paths differ only by effect index, and two
+    AUTH-002 findings whose paths differ only in the leaf field. A printer that
+    emitted one path per RULE, or a constant, would still satisfy a set
+    comparison against the rules that fired.
+    """
+    return [line[len("  at "):] for line in stdout.splitlines()
+            if line.startswith("  at ")]
+
+
+def test_review_prints_where_to_make_each_edit(tmp_path):
+    """Every hint is an instruction to edit the contract, and the location it
+    refers to was written only to findings.json. Same list, same order, so a
+    finding that stops printing its path is caught even while the others do."""
+    result = run_cli("review", str(UNSAFE), "--out", str(tmp_path))
+    findings = json.loads((tmp_path / "findings.json").read_text())
+    assert _printed_paths(result.stdout) == [f["path"] for f in findings]
+
+
+def test_review_paths_separate_two_findings_of_the_same_rule(tmp_path):
+    """The unsafe fixture fails RECON-001 twice, for two different effects.
+    A reader who is told to add a reconciliation entry twice, with no way to
+    tell which effect each one is about, has been given one instruction."""
+    result = run_cli("review", str(UNSAFE), "--out", str(tmp_path))
+    printed = _printed_paths(result.stdout)
+    assert "effects[0].destination" in printed
+    assert "effects[1].destination" in printed
+    assert len(set(printed)) == len(printed), printed
+
+
+def test_a_newline_in_a_contract_value_cannot_forge_a_finding_line(tmp_path):
+    """The schema accepts a newline inside an effect name, and messages splice
+    that name. Without normalization the terminal grows lines that read as
+    another finding's location, so the tool would be reporting something the
+    contract said as something the tool found. Four lines per finding, always.
+    """
+    import yaml
+    doc = yaml.safe_load(UNSAFE.read_text())
+    doc["effects"][0]["name"] = "deploy\n  at work.FORGED\nFAIL FORGED-001"
+    contract = tmp_path / "forged.yaml"
+    contract.write_text(yaml.safe_dump(doc))
+
+    result = run_cli("review", str(contract), "--out", str(tmp_path))
+    findings = json.loads((tmp_path / "findings.json").read_text())
+    assert _printed_paths(result.stdout) == [f["path"] for f in findings]
+    assert len(finding_lines(result.stdout, "FAIL")) == \
+        sum(1 for f in findings if f["severity"] == "FAIL")
+    assert "FORGED" not in "".join(_printed_paths(result.stdout))
+    # The value itself is not censored, only flattened: it still reaches the
+    # reader, on the line it belongs to, with its words still separated. The
+    # spacing is asserted because a normalizer that DELETED whitespace instead
+    # of collapsing it also passes every check above, and turns a name into an
+    # unreadable run of characters.
+    assert "deploy at work.FORGED FAIL FORGED-001" in result.stdout
+
+
+# The one hint in the rules catalog that is not a plain literal. It lists the
+# allowed policy values from a module constant, which is a fact about the rules
+# and not about the contract under review. Matched on its source text rather
+# than its line number, so it survives edits above it.
+_COMPOSED_HINTS = {
+    '"Use one of: " + ", ".join(sorted(SOUND_POLICIES)) + ". If the factory '
+    'genuinely does something else, add it to the rules with its cost stated, '
+    'not only to the schema."',
+}
+
+
+def test_no_hint_is_built_from_contract_data():
+    """The printer normalizes the hint as well as the message, and nothing can
+    currently reach that: every hint in the rules catalog is a literal, bar one
+    that composes module constants.
+
+    This is not a prohibition. A rule that needs to name a value in its hint
+    should do it, and the normalization is already there for that day. The test
+    exists so the day is noticed, because a defensive line nobody can trigger
+    is indistinguishable from a dead one, and this is the record of which it is.
+
+    Deliberately not a naming heuristic. The first version accepted any name
+    that was upper case, on the reasoning that contract data arrives in lower
+    case locals -- a rule about how this file happens to be written today, which
+    an uppercase local would walk straight through. An allowlist of the exact
+    composed hints is checkable by reading two things, and a new one is a red
+    test rather than a judgement call the test makes on the author's behalf.
+    """
+    import ast
+    source = (ROOT / "src" / "rules.py").read_text()
+    tree = ast.parse(source)
+    composed = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call)
+                and getattr(node.func, "id", None) == "Finding"):
+            continue
+        hint = node.args[3] if len(node.args) >= 4 else next(
+            (kw.value for kw in node.keywords if kw.arg == "hint"), None)
+        assert hint is not None, f"Finding at line {node.lineno} passes no hint"
+        if isinstance(hint, ast.Constant):
+            continue
+        segment = " ".join(ast.get_source_segment(source, hint).split())
+        if segment not in {" ".join(known.split()) for known in _COMPOSED_HINTS}:
+            composed.append(f"{node.lineno}: {segment[:90]}")
+    assert not composed, (
+        "src/rules.py composes a hint this test has not seen:\n  "
+        + "\n  ".join(composed)
+        + "\n\nIf it interpolates contract data that is fine, the printer "
+          "flattens it. Add it to _COMPOSED_HINTS so the next one is noticed.")
+
+
 def test_review_unsafe_factory_findings(tmp_path):
     result = run_cli("review", str(UNSAFE), "--out", str(tmp_path))
     assert result.returncode == 1
@@ -559,6 +669,110 @@ def test_no_page_quotes_a_summary_that_is_no_longer_true(tmp_path):
         + "\n\nRe-run the example and correct the page, or mark the line "
           f"{_HISTORICAL_MARKER} if the figure is cited as history.\n"
           "Current summaries: " + ", ".join(sorted(live)))
+
+
+# A finding block quoted verbatim in prose. The summary guards above cover the
+# TOTALS a page prints and say nothing about the finding it shows underneath
+# them, which is how QUICKSTART came to display a three-line block for output
+# that had grown a fourth line. A page that shows what the tool prints is a
+# claim about the tool, the same as a count is.
+_QUOTED_BLOCK_HEAD = re.compile(r"^(FAIL|WARN) [A-Z]+-\d+$")
+
+
+def _collapse(text):
+    """Whitespace-insensitive, because a page rewraps a long message to fit its
+    column width and that is not drift. The words and their order are the
+    claim; where the line breaks fall is typesetting."""
+    return " ".join(text.split())
+
+
+def _quoted_finding_blocks():
+    """Every fenced block in the documentation that opens like a finding.
+
+    Enumerated from disk for the same reason the summary guard is: a page that
+    starts quoting output is covered the day someone writes it, without anyone
+    remembering to add it to a list. Both fence markers are read, and the
+    marker that opened a block is the only one that can close it, so a `~~~`
+    line inside a ``` block is content rather than a toggle.
+
+    Returns (page, first_line, last_line, text) so the companion test can ask
+    whether a finding line that appears somewhere else on the page was inside
+    a block this walk actually captured.
+    """
+    blocks = []
+    for page in _documentation_pages():
+        lines = page.read_text().splitlines()
+        marker, start, buffer = None, 0, []
+        for number, line in enumerate(lines, 1):
+            stripped = line.strip()
+            opener = next((f for f in ("```", "~~~") if stripped.startswith(f)), None)
+            if opener and marker is None:
+                marker, start, buffer = opener, number, []
+                continue
+            if opener == marker and marker is not None:
+                if buffer and _QUOTED_BLOCK_HEAD.match(buffer[0].strip()):
+                    blocks.append((page, start + 1, number - 1, "\n".join(buffer)))
+                marker = None
+                continue
+            if marker is not None:
+                buffer.append(line)
+    return blocks
+
+
+def test_no_page_shows_a_finding_the_tool_no_longer_prints(tmp_path):
+    """A quoted finding block matches a real one, whole.
+
+    Matched against each finding INDIVIDUALLY rather than against the whole
+    transcript: a substring test over the joined output would let a block that
+    ran the tail of one finding into the head of the next pass, and that is
+    precisely the shape a page acquires when the output grows a line.
+    """
+    live = set()
+    for relative in EXPECTED_EXAMPLE_FINDINGS:
+        out = tmp_path / relative.replace("/", "_")
+        run_cli("review", str(_example_path(relative)), "--out", str(out))
+        for finding in json.loads((out / "findings.json").read_text()):
+            live.add(_collapse("{severity} {rule} {message} {hint} at {path}"
+                               .format(**finding)))
+
+    blocks = _quoted_finding_blocks()
+    assert blocks, "no quoted finding blocks found; the walk is broken"
+    stale = [f"{page.relative_to(ROOT)}:{first}"
+             for page, first, _last, text in blocks
+             if _collapse(text) not in live]
+    assert not stale, (
+        "documentation shows finding blocks no example produces:\n  "
+        + "\n  ".join(stale)
+        + "\n\nRe-run the example and paste the current block.")
+
+
+def test_every_finding_line_in_the_documentation_is_inside_a_block_we_read():
+    """No page shows a finding in a shape the walk above cannot see.
+
+    The walk reads ``` and ~~~ fences. Markdown also renders a four-space
+    indented block, and a page could quote output that way and drift forever
+    with the guard green, which is the failure the guard exists to prevent
+    arriving through its own blind spot. So rather than teach the walk every
+    markdown dialect, this asserts the narrower thing: a line that looks like
+    the head of a finding is inside a block the walk captured. A page that
+    wants a four-space block gets a red test and a fence.
+    """
+    spans = {}
+    for page, first, last, _text in _quoted_finding_blocks():
+        spans.setdefault(page, []).append((first, last))
+
+    loose = []
+    for page in _documentation_pages():
+        for number, line in enumerate(page.read_text().splitlines(), 1):
+            if not _QUOTED_BLOCK_HEAD.match(line.strip()):
+                continue
+            if not any(first <= number <= last
+                       for first, last in spans.get(page, [])):
+                loose.append(f"{page.relative_to(ROOT)}:{number}: {line.strip()}")
+    assert not loose, (
+        "finding lines outside any fenced block the drift guard reads:\n  "
+        + "\n  ".join(loose)
+        + "\n\nPut the quoted output in a ``` or ~~~ fence so it is checked.")
 
 
 def test_the_historical_marker_is_the_only_thing_excusing_a_stale_count(tmp_path):

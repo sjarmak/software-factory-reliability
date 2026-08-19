@@ -34,8 +34,9 @@ promise nothing enforceable; that is the point of this example.
 python3 src/factory_check.py review examples/unsafe-factory.yaml
 ```
 
-The review prints each finding as a severity and rule id followed by the
-defect and a remediation hint. The first finding today:
+The review prints each finding as a severity and rule id, then the defect, a
+remediation hint, and the place in the contract the hint is about. The first
+finding today:
 
 ```
 FAIL AUTH-002
@@ -43,7 +44,11 @@ FAIL AUTH-002
   write the claim can change hands, a time-of-check to time-of-use race.
   Move enforcement to the destination side (publisher, destination, or
   store), which evaluates the generation atomically with the write.
+  at work.ownership.fence.enforced_by
 ```
+
+The last line is the one to act on first. This contract fails AUTH-002 twice,
+and the two findings differ only in that line.
 
 and the totals line for this contract is:
 

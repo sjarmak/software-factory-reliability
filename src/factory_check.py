@@ -205,6 +205,20 @@ def _load_valid_contract(file_arg):
     return doc
 
 
+def _one_line(text):
+    """A finding is exactly four lines, whatever the contract holds.
+
+    Messages splice values the contract author wrote, and the schema accepts a
+    newline inside one. An effect named `deploy\\n  at work.X` puts a line into
+    the terminal that reads as another finding's location, which is a tool
+    reporting something the contract said rather than something the tool found.
+    Names with newlines in them are a mistake rather than an attack here, and
+    the answer is the same either way: the display owes a shape. findings.json
+    keeps the raw value.
+    """
+    return " ".join(text.split())
+
+
 def cmd_review(args):
     doc = _load_valid_contract(args.file)
     if doc is None:
@@ -215,8 +229,16 @@ def cmd_review(args):
     ordered = [f for _, f in ordered]
     for finding in ordered:
         print(f"{finding.severity} {finding.rule}")
-        print(f"  {finding.message}")
-        print(f"  {finding.hint}")
+        print(f"  {_one_line(finding.message)}")
+        print(f"  {_one_line(finding.hint)}")
+        # The hint is an instruction to edit the contract, and until now the
+        # only copy of WHERE to edit went to findings.json. A derived contract
+        # for a repository of ordinary size is several hundred lines and holds
+        # seven effects whose findings are worded identically apart from the
+        # effect name, so "Decide deduplicate, converge, reconcile, or
+        # at_least_once" arrived with the reader still owing themselves a
+        # search. The rule already computed the answer.
+        print(f"  at {finding.path}")
     fail_count = sum(1 for f in ordered if f.severity == "FAIL")
     warn_count = len(ordered) - fail_count
     print(f"{fail_count} FAIL, {warn_count} WARN")
@@ -945,7 +967,7 @@ def cmd_reconcile(args):
 
     for name, claimed, reason in drift:
         print("DRIFT  %s: contract says effect_identity %s; installation says %s"
-              % (name, claimed, reason))
+              % (_one_line(name), _one_line(claimed), reason))
         _print_review_lines(by_name.get(name))
     # Every verdict prints its review lines, and the reasoning that used to
     # exempt two of them is recorded here because it was correct and stopped
@@ -958,10 +980,11 @@ def cmd_reconcile(args):
     # verdicts where a reader most needs to see which lines produced the count,
     # and the two that were silent.
     for name, note in unverifiable:
-        print("UNVERIFIED  %s: %s" % (name, note))
+        print("UNVERIFIED  %s: %s" % (_one_line(name), note))
         _print_review_lines(by_name.get(name))
     for name, claimed, reason in confirmed:
-        print("CONFIRMED  %s: effect_identity %s, %s" % (name, claimed, reason))
+        print("CONFIRMED  %s: effect_identity %s, %s"
+              % (_one_line(name), _one_line(claimed), reason))
         _print_review_lines(by_name.get(name))
     for name in confirmed_on_key:
         # A static scan can check that every call site carries the token the
@@ -972,14 +995,14 @@ def cmd_reconcile(args):
         # claim nobody measured.
         print("           %s: confirmed on the named key; whether that key's "
               "value is the identity the prose describes is not statically "
-              "checkable" % name)
+              "checkable" % _one_line(name))
     for name, reason in open_items:
-        print("OPEN  %s: undecided in the contract and %s" % (name, reason))
+        print("OPEN  %s: undecided in the contract and %s" % (_one_line(name), reason))
         _print_review_lines(by_name.get(name))
     for name, reason in undeclared:
-        print("UNDECLARED  %s: %s" % (name, reason))
+        print("UNDECLARED  %s: %s" % (_one_line(name), reason))
     for name, label, reason in stale_observations:
-        print("%s  %s: %s" % (label, name, reason))
+        print("%s  %s: %s" % (label, _one_line(name), reason))
     print("%d drift, %d unverified, %d confirmed, %d open (of %d declared)"
           % (len(drift), len(unverifiable), len(confirmed), len(open_items),
              len([e for e in declared_effects if isinstance(e, dict)])))
