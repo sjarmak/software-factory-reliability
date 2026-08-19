@@ -173,6 +173,20 @@ at every call site, and does not say the token's runtime value is the identity
 the sentence describes -- reconcile prints that limit on those rows rather than
 letting the word CONFIRMED carry a claim no scanner can make.
 
+A contract that cites the code is worth more than one that describes it, and
+those citations rot silently. `cites` resolves each `path/to/file.go:120-130`
+against your source roots:
+
+```bash
+python3 src/factory_check.py cites factory.yaml /path/to/your/factory /path/to/a/second/repo
+```
+
+Ours carried a refuted citation for a day and contradicted itself on the same
+line number in two places. It reports the file that no longer exists and the
+range that runs off the end of one that does; it deliberately does not claim
+the cited line still says what the contract says it says, because a line-pinned
+claim invalidates its own refutation as soon as anything above it moves.
+
 [QUICKSTART.md](QUICKSTART.md) walks the full first session under an hour, and
 [`docs/contract-reference.md`](docs/contract-reference.md) documents every
 section and all twenty-five rules.

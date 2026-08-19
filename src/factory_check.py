@@ -9,6 +9,7 @@ Subcommands:
   infer      derive a contract from a real installation, with call-site evidence
   probes-init  scaffold a probe pack by reading an installation
   reconcile  compare a hand-written contract against what the installation shows
+  cites      resolve the path:line references a contract makes about code
 
 Schemas are located relative to this script, not the working directory.
 """
@@ -25,6 +26,7 @@ from jsonschema import Draft202012Validator, FormatChecker
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
+import cites as cites_mod  # noqa: E402
 import infer as infer_mod
 import probe_scaffold as scaffold_mod  # noqa: E402
 import render as render_mod  # noqa: E402
@@ -911,6 +913,69 @@ def cmd_reconcile(args):
     return 1 if drift or undeclared or contradicted else 0
 
 
+def cmd_cites(args):
+    """Report the path:line references that no longer resolve.
+
+    Deliberately reads the contract as TEXT rather than as a parsed document:
+    almost every cite in a real contract lives in a comment, which the YAML
+    loader discards. A version that walked the parsed tree would report a
+    handful of cites and a clean run, which is the shape of a check that finds
+    nothing because it is not looking.
+    """
+    path = Path(args.file)
+    try:
+        text = path.read_text()
+    except OSError as exc:
+        print(f"{path}: unreadable: {exc}")
+        return 2
+    missing_roots = [r for r in args.roots if not Path(r).is_dir()]
+    if missing_roots:
+        for root in missing_roots:
+            print(f"{root}: not a directory")
+        # Exit 2, not 1. Every cite would report missing against a root that
+        # is not there, and a wall of findings caused by a typo'd argument
+        # reads exactly like a contract that rotted through.
+        return 2
+
+    found = cites_mod.resolve(cites_mod.extract(text), args.roots)
+    if not found:
+        print(f"{path}: no path:line cites found")
+        print("This is a claim about the contract's TEXT, not about the code.")
+        return 0
+
+    buckets = {"missing": [], "out_of_range": [], "ambiguous": [],
+               "resolved": [], "resolved_via_contract": []}
+    for cite in found:
+        buckets[cite.status].append(cite)
+
+    for status, label in (("missing", "MISSING"), ("out_of_range", "OUT OF RANGE")):
+        for cite in buckets[status]:
+            print(f"{label} {path}:{cite.line_number}: {cite.raw} — {cite.detail}")
+    for cite in buckets["ambiguous"]:
+        print(f"AMBIGUOUS {path}:{cite.line_number}: {cite.raw} — {cite.detail}")
+
+    # Printed, not merely counted: each of these rests on a full path the
+    # CONTRACT wrote somewhere else, not on anything at the cite itself, and a
+    # basename the contract pinned once can still have been meant for a
+    # different file of the same name. Naming the file it chose is what lets a
+    # reader disagree with the inference.
+    for cite in buckets["resolved_via_contract"]:
+        print(f"INFERRED {path}:{cite.line_number}: {cite.raw} -> "
+              f"{cite.resolved}, from a full path this contract gave elsewhere")
+
+    resolved = len(buckets["resolved"])
+    inferred = len(buckets["resolved_via_contract"])
+    broken = len(buckets["missing"]) + len(buckets["out_of_range"])
+    print(f"{len(found)} cite(s): {resolved} resolved, {inferred} resolved via a "
+          f"full path the contract gave elsewhere, {broken} broken, "
+          f"{len(buckets['ambiguous'])} ambiguous")
+    print("Resolved means the file exists and the line is inside it. It does "
+          "NOT mean the line still says what the contract claims: a line-pinned "
+          "claim invalidates its own refutation as soon as anything above it "
+          "moves, so that is not checkable here.")
+    return 1 if broken else 0
+
+
 def cmd_render(args):
     doc = _load_valid_contract(args.file)
     if doc is None:
@@ -978,6 +1043,14 @@ def main(argv=None):
     p_recon.add_argument("installation", help="root directory of the installation")
     p_recon.add_argument("--probes", required=True, help="probe pack YAML")
     p_recon.set_defaults(func=cmd_reconcile)
+
+    p_cites = sub.add_parser(
+        "cites",
+        help="resolve the path:line references a contract makes about code")
+    p_cites.add_argument("file", help="hand-written factory contract")
+    p_cites.add_argument("roots", nargs="+",
+                         help="one or more repository roots the cites point into")
+    p_cites.set_defaults(func=cmd_cites)
 
     p_render = sub.add_parser("render", help="render diagrams and tables")
     p_render.add_argument("file", help="factory contract to render")

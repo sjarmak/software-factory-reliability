@@ -1691,3 +1691,477 @@ def test_examples_readme_tables_enumerate_the_actual_findings(tmp_path):
             f"the {severity} table in examples/README.md lists "
             f"{sorted(blocks[matching[0]])} and the unsafe contract produces "
             f"{live}; add the missing row or drop the stale one")
+
+
+# ---------------------------------------------------------------------------
+# cites: the path:line references a contract makes about code
+#
+# Motivated by a real one. Our own contract carried
+# internal/worker/runtime_handle.go:266-276 as a site that collapses a named
+# UNKNOWN to SUCCESS; on re-derivation that function propagates, and the same
+# file separately carried the CORRECTED version sixty lines away. Two
+# statements about one function, in one document, one of them false, for a day.
+# `reconcile` cannot see either: cites live in comments, which the YAML loader
+# throws away.
+
+
+def _minimal_contract_text():
+    """The kit's own minimal contract, which carries no cites of its own.
+
+    Verified rather than assumed: cites.extract() returns [] for it, so a case
+    below asserting "no cites found" is measuring the fixture it wrote and not
+    inheriting one.
+    """
+    return (EXAMPLES / "minimal-factory.yaml").read_text()
+
+
+def _tree(root, files):
+    """Write {relative path: line count or text} under root."""
+    for relative, content in files.items():
+        target = Path(root) / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if isinstance(content, int):
+            content = "\n".join(f"line {n}" for n in range(1, content + 1))
+        target.write_text(content)
+    return str(root)
+
+
+def test_cites_extracts_from_comments_not_from_the_parsed_document():
+    """A contract's cites are in comments; a parsed-tree walk would see none."""
+    from src import cites as cites_mod
+    text = ("# see internal/runtime/tmux/tmux.go:213\n"
+            "effects:\n"
+            "  - name: x  # adapter.go:1332-1341\n")
+    found = cites_mod.extract(text)
+    assert [c.raw for c in found] == ["internal/runtime/tmux/tmux.go:213",
+                                      "adapter.go:1332-1341"]
+    assert (found[1].start, found[1].end) == (1332, 1341)
+
+
+def test_cites_does_not_match_urls_versions_or_yaml_keys():
+    """The three shapes that look like a cite and are not.
+
+    Each of these appears in real contracts. A checker that reported them would
+    produce a page of findings on a healthy file, and the next person would
+    stop running it -- which is the failure mode, not the false positives.
+    """
+    from src import cites as cites_mod
+    text = ("# https://example.com:8080/path/to/thing.go\n"
+            "  timeout: 30\n"
+            "# pinned at v1.2.3 and gascity-main @b726b41f1\n")
+    assert cites_mod.extract(text) == []
+
+
+def test_cites_reports_a_file_that_is_not_there(tmp_path):
+    root = _tree(tmp_path / "repo", {"internal/a.go": 50})
+    contract = tmp_path / "factory.yaml"
+    contract.write_text(_minimal_contract_text() + "\n# gone: internal/deleted.go:12\n")
+    result = run_cli("cites", str(contract), root)
+    assert result.returncode == 1
+    assert "MISSING" in result.stdout and "internal/deleted.go:12" in result.stdout
+
+
+def test_cites_reports_a_line_past_the_end_of_the_file(tmp_path):
+    """The exact shape our contract rotted into: the file survived, the line did not."""
+    root = _tree(tmp_path / "repo", {"internal/a.go": 50})
+    contract = tmp_path / "factory.yaml"
+    contract.write_text(_minimal_contract_text() + "\n# stale: internal/a.go:266-276\n")
+    result = run_cli("cites", str(contract), root)
+    assert result.returncode == 1
+    assert "OUT OF RANGE" in result.stdout
+    assert "file has 50 lines" in result.stdout
+
+
+def test_cites_accepts_a_range_that_ends_on_the_last_line(tmp_path):
+    """Off-by-one rail: the boundary is inclusive, so the last line resolves."""
+    root = _tree(tmp_path / "repo", {"internal/a.go": 50})
+    contract = tmp_path / "factory.yaml"
+    contract.write_text(_minimal_contract_text() + "\n# ok: internal/a.go:40-50\n")
+    result = run_cli("cites", str(contract), root)
+    assert result.returncode == 0, result.stdout
+    assert "1 resolved" in result.stdout and "0 broken" in result.stdout
+
+
+def test_cites_resolves_a_bare_filename_and_flags_an_ambiguous_one(tmp_path):
+    """Bare filenames are how contracts are actually written, and they collide."""
+    # NOT vendor/ or a nested checkout: those are skipped by design and would
+    # make this pass for the wrong reason. Two ordinary copies is the case.
+    root = _tree(tmp_path / "repo", {"internal/tmux.go": 50, "cmd/only.go": 50,
+                                     "pkg/tmux.go": 50})
+    contract = tmp_path / "factory.yaml"
+    contract.write_text(_minimal_contract_text()
+                        + "\n# unique: only.go:10\n# collides: tmux.go:10\n")
+    result = run_cli("cites", str(contract), root)
+    # Ambiguity is reported and does not fail: the contract is not wrong, the
+    # check cannot tell which file was meant, and guessing would make a green
+    # run mean less than it says.
+    assert result.returncode == 0, result.stdout
+    assert "AMBIGUOUS" in result.stdout and "tmux.go:10" in result.stdout
+    assert "1 resolved" in result.stdout and "1 ambiguous" in result.stdout
+
+
+def test_cites_spans_multiple_roots(tmp_path):
+    """A contract cites more than one repository; ours cites two."""
+    city = _tree(tmp_path / "city", {"bin/thing.sh": 20})
+    source = _tree(tmp_path / "source", {"internal/runtime/tmux/tmux.go": 3000})
+    contract = tmp_path / "factory.yaml"
+    contract.write_text(_minimal_contract_text()
+                        + "\n# bin/thing.sh:5 and internal/runtime/tmux/tmux.go:2208-2223\n")
+    result = run_cli("cites", str(contract), city, source)
+    assert result.returncode == 0, result.stdout
+    assert "2 resolved" in result.stdout and "0 broken" in result.stdout
+
+
+def test_cites_refuses_a_root_that_does_not_exist(tmp_path):
+    """A typo'd root would make every cite report missing.
+
+    Exit 2, not 1: a wall of findings caused by a bad argument is
+    indistinguishable from a contract that rotted through, and the second is
+    the one someone would act on.
+    """
+    contract = tmp_path / "factory.yaml"
+    contract.write_text(_minimal_contract_text() + "\n# internal/a.go:12\n")
+    result = run_cli("cites", str(contract), str(tmp_path / "nope"))
+    assert result.returncode == 2
+    assert "not a directory" in result.stdout
+    assert "MISSING" not in result.stdout
+
+
+def test_cites_says_what_a_green_run_does_not_prove(tmp_path):
+    """The limit is printed, not implied.
+
+    A check that let "resolved" read as "the contract's claim was confirmed"
+    would be worse than no check: the whole reason cites rot is that the line
+    keeps existing while its meaning moves.
+    """
+    root = _tree(tmp_path / "repo", {"internal/a.go": 50})
+    contract = tmp_path / "factory.yaml"
+    contract.write_text(_minimal_contract_text() + "\n# internal/a.go:12\n")
+    result = run_cli("cites", str(contract), root)
+    assert result.returncode == 0
+    assert "does NOT mean the line still says" in result.stdout.replace("\n", " ")
+
+
+def test_cites_on_a_contract_with_no_cites_says_so(tmp_path):
+    contract = tmp_path / "factory.yaml"
+    contract.write_text(_minimal_contract_text())
+    root = _tree(tmp_path / "repo", {"internal/a.go": 50})
+    result = run_cli("cites", str(contract), root)
+    assert result.returncode == 0
+    assert "no path:line cites found" in result.stdout
+
+
+def test_cites_ignores_a_line_number_inside_a_url():
+    """A link to a hosted file is not a claim about the local tree.
+
+    This case exists because the first guard could not catch it. The path
+    pattern allows a leading `/`, so the match began INSIDE the scheme
+    (`https:` + `/github.com/...`), and every "is the text before this a URL"
+    test saw `https:/` and passed it through -- reporting a mangled path that
+    could never resolve. URLs are now blanked before the scan instead.
+    """
+    from src import cites as cites_mod
+    line = "see https://github.com/org/repo/blob/main/internal/a.go:12 here"
+    assert cites_mod.extract(line) == []
+
+
+def test_cites_reads_an_absolute_path(tmp_path):
+    """An absolute cite is a real thing people write, and resolves on its own.
+
+    Note what this means: an absolute path answers from the filesystem, not
+    from the roots given on the command line. That is the honest behaviour --
+    the cite named a location, not a location relative to something -- but it
+    is worth knowing before reading a green run as "everything resolved under
+    the roots I passed".
+    """
+    from src import cites as cites_mod
+    target = tmp_path / "abs" / "handler.go"
+    target.parent.mkdir(parents=True)
+    target.write_text("\n".join(f"line {n}" for n in range(1, 100)))
+    found = cites_mod.resolve(
+        cites_mod.extract(f"# boom at {target}:99\n"), [str(tmp_path)])
+    assert [(c.status, c.start) for c in found] == [("resolved", 99)]
+
+
+def test_cites_stitches_a_path_wrapped_across_two_comment_lines():
+    """Half the first version's findings on our own contract were this bug.
+
+    An author wrapping at the column limit writes `assets/scripts/` on one line
+    and `gascity-ship-gate.sh:198-210` on the next. Reported as a broken cite,
+    that is a false positive naming a file the contract never claimed -- and a
+    checker whose findings are half its own artifacts stops being run.
+    """
+    from src import cites as cites_mod
+    text = ("  # refuses to push when it differs from the SHA (assets/scripts/\n"
+            "  # gascity-ship-gate.sh:198-210). That is a correct check.\n")
+    found = cites_mod.extract(text)
+    assert [c.raw for c in found] == ["assets/scripts/gascity-ship-gate.sh:198-210"]
+    # The line reported is where the cite starts, which is where a reader looks.
+    assert found[0].line_number == 1
+
+
+def test_cites_does_not_stitch_a_yaml_value_that_ends_in_a_slash():
+    """The rejoin is narrow on purpose: a comment continued by a comment.
+
+    Both halves are checked, because they are separate guards and the first
+    version of this test only exercised one of them: widening the pattern that
+    decides a line is CONTINUED left every case green, since the follow-line
+    check caught them anyway. A directory value happening to precede a comment
+    is the input that tells the two apart, and it stitches a path the contract
+    never wrote.
+    """
+    from src import cites as cites_mod
+    # (a) the continued line is not a comment; the follow line is.
+    stitched = "workdir: /var/tmp/\n# handler.go:99\n"
+    assert [c.raw for c in cites_mod.extract(stitched)] == ["handler.go:99"]
+    # (b) the continued line is a comment; the follow line is not.
+    text = ("# see internal/\n"
+            "note: handler.go:99\n")
+    assert [c.raw for c in cites_mod.extract(text)] == ["handler.go:99"]
+
+
+def test_cites_skips_a_nested_checkout_and_a_vendor_copy(tmp_path):
+    """A copy of code that lives elsewhere is not a second candidate.
+
+    Measured on our own installation before this: a stray gascity checkout and
+    a bead worktree, both sitting inside the city root, made seven bare cites
+    ambiguous against their own duplicates. That is a fact about the disk, not
+    about the contract, and it buried the four real findings under twenty-four.
+    """
+    root = tmp_path / "repo"
+    _tree(root, {"cmd/a.go": 50,
+                 "worktrees/copy/cmd/a.go": 50,
+                 "vendor/pkg/a.go": 50})
+    (root / "worktrees" / "copy" / ".git").write_text("gitdir: elsewhere\n")
+    contract = tmp_path / "factory.yaml"
+    contract.write_text(_minimal_contract_text() + "\n# a.go:10\n")
+    result = run_cli("cites", str(contract), str(root))
+    assert result.returncode == 0, result.stdout
+    assert "AMBIGUOUS" not in result.stdout
+    assert "1 resolved" in result.stdout
+
+
+def test_cites_uses_a_full_path_the_contract_gave_earlier(tmp_path):
+    """The short form is resolved from the document's own earlier text.
+
+    Counted separately from a plain resolve, because it IS an inference: the
+    contract said `internal/x/tmux.go` once and `tmux.go` four times, and the
+    second reading rests on the first rather than on anything written at the
+    cite itself.
+    """
+    root = _tree(tmp_path / "repo", {"internal/x/tmux.go": 3000,
+                                     "other/y/tmux.go": 3000})
+    contract = tmp_path / "factory.yaml"
+    contract.write_text(_minimal_contract_text()
+                        + "\n# internal/x/tmux.go:213 then later tmux.go:2208-2223\n")
+    result = run_cli("cites", str(contract), root)
+    assert result.returncode == 0, result.stdout
+    assert "AMBIGUOUS" not in result.stdout
+    assert "1 resolved, 1 resolved via a full path" in result.stdout
+
+
+def test_cites_will_not_guess_when_the_contract_pinned_two_full_paths(tmp_path):
+    """The inference stops exactly where it would have to choose.
+
+    A basename the contract itself wrote out as two different full paths is
+    genuinely ambiguous in the short form, and resolving it would put a guess
+    behind a green run.
+    """
+    root = _tree(tmp_path / "repo", {"internal/x/tmux.go": 3000,
+                                     "other/y/tmux.go": 3000})
+    contract = tmp_path / "factory.yaml"
+    contract.write_text(_minimal_contract_text()
+                        + "\n# internal/x/tmux.go:213 and other/y/tmux.go:9"
+                          " then bare tmux.go:2208\n")
+    result = run_cli("cites", str(contract), root)
+    assert "AMBIGUOUS" in result.stdout and "tmux.go:2208" in result.stdout
+    assert "2 resolved" in result.stdout and "1 ambiguous" in result.stdout
+
+
+def test_contract_reference_documents_every_subcommand():
+    """The command table stays the parser's, in both directions.
+
+    It had drifted three commands behind before this rail existed -- `infer`,
+    `probes-init` and `reconcile` were live, documented in README prose, and
+    absent from the table that calls itself Commands. A reader deciding what
+    the tool can do reads the table.
+    """
+    source = (ROOT / "src" / "factory_check.py").read_text()
+    live = set(re.findall(r'sub\.add_parser\(\s*"([a-z-]+)"', source))
+    assert live, "no subparsers found; the parse is broken, not the docs"
+    reference = (ROOT / "docs" / "contract-reference.md").read_text()
+    table = re.findall(r"factory_check\.py ([a-z-]+)", reference)
+    assert live - set(table) == set(), (
+        "subcommands with no row in docs/contract-reference.md: "
+        f"{sorted(live - set(table))}")
+    assert set(table) - live == set(), (
+        "docs/contract-reference.md names subcommands the CLI does not have: "
+        f"{sorted(set(table) - live)}")
+
+
+def test_cites_prefers_a_file_sitting_at_the_root_over_deeper_copies(tmp_path):
+    """A bare name that IS a root-relative path resolves to the root's file.
+
+    The full-path pass cannot help here: for a file at the root, the path from
+    the root and the bare name are the same string, so a contract that writes
+    `city.toml` gives the disambiguating pass nothing to work with. Measured on
+    our own installation, two of the three remaining ambiguities were this.
+    """
+    root = _tree(tmp_path / "repo", {"city.toml": 300,
+                                     "fixtures/a/city.toml": 5,
+                                     "fixtures/b/city.toml": 5})
+    contract = tmp_path / "factory.yaml"
+    contract.write_text(_minimal_contract_text() + "\n# city.toml:271\n")
+    result = run_cli("cites", str(contract), root)
+    assert result.returncode == 0, result.stdout
+    assert "AMBIGUOUS" not in result.stdout
+    # 271 is inside the root copy and past the end of both fixture copies, so
+    # a green run here also proves it picked the right one rather than merely
+    # picking one.
+    assert "1 resolved" in result.stdout and "0 broken" in result.stdout
+
+
+def test_cites_still_reports_two_copies_that_are_both_below_the_root(tmp_path):
+    """The preference is for a file AT a root, not for the shallowest one."""
+    root = _tree(tmp_path / "repo", {"internal/store.go": 90, "pkg/store.go": 90})
+    contract = tmp_path / "factory.yaml"
+    contract.write_text(_minimal_contract_text() + "\n# store.go:47-48\n")
+    result = run_cli("cites", str(contract), root)
+    assert "AMBIGUOUS" in result.stdout and "1 ambiguous" in result.stdout
+
+
+def test_cites_terminates_when_a_wrap_ends_the_comment_block():
+    """A path cut at the last line of a block must not rejoin forever."""
+    from src import cites as cites_mod
+    # Trailing slash with nothing to continue it, then a bare `#`, then the
+    # same at the very end of the text. Each was an infinite loop.
+    text = "# see assets/scripts/\n#\n# handler.go:99\n# internal/\n"
+    found = cites_mod.extract(text)
+    assert [c.raw for c in found] == ["handler.go:99"]
+
+
+def test_cites_stitches_a_path_cut_at_a_hyphen_a_dot_and_a_colon():
+    """Our own contract wraps at four different characters in one paragraph.
+
+    Three of the five cites in it were invisible to the first version, which
+    only handled a trailing slash: a cite the tool never saw reads exactly
+    like one it checked and found fine.
+    """
+    from src import cites as cites_mod
+    text = ("    # three sites push by name only -- mol-pr-from-issue.formula.\n"
+            "    # toml:711, .beads/formulas/mol-polecat-\n"
+            "    # commit.toml:118. One is conditional: mol-adopt-pr.toml:\n"
+            "    # 717-719 chooses --force-with-lease.\n")
+    assert [c.raw for c in cites_mod.extract(text)] == [
+        "mol-pr-from-issue.formula.toml:711",
+        ".beads/formulas/mol-polecat-commit.toml:118",
+        "mol-adopt-pr.toml:717-719",
+    ]
+
+
+def test_cites_does_not_stitch_an_ordinary_sentence_ending_in_a_period():
+    """The period case is the one that would run away if left uncorroborated."""
+    from src import cites as cites_mod
+    text = ("# measured rather than assumed.\n"
+            "# Corrected here as well, in handler.go:99.\n")
+    found = cites_mod.extract(text)
+    assert [c.raw for c in found] == ["handler.go:99"]
+    assert found[0].line_number == 2, "attribution moved to the wrong line"
+
+
+def test_cites_resolves_a_partial_path_from_the_end(tmp_path):
+    """`issueops/lease.go` for a file at `internal/storage/issueops/lease.go`.
+
+    Our own contract cites the beads repository this way. Before this, passing
+    that repository as a root changed nothing -- the cite was still MISSING,
+    which reads as a deleted file rather than as an abbreviated path.
+    """
+    root = _tree(tmp_path / "repo", {"internal/storage/issueops/lease.go": 200,
+                                     "cmd/main.go": 10})
+    contract = tmp_path / "factory.yaml"
+    contract.write_text(_minimal_contract_text() + "\n# issueops/lease.go:99-115\n")
+    result = run_cli("cites", str(contract), root)
+    assert result.returncode == 0, result.stdout
+    assert "1 resolved" in result.stdout and "0 broken" in result.stdout
+
+
+def test_cites_will_not_take_a_partial_path_that_matches_two_files(tmp_path):
+    """The suffix fallback gets the same ambiguity discipline as a bare name."""
+    root = _tree(tmp_path / "repo", {"a/issueops/lease.go": 200,
+                                     "b/issueops/lease.go": 200})
+    contract = tmp_path / "factory.yaml"
+    contract.write_text(_minimal_contract_text() + "\n# issueops/lease.go:99\n")
+    result = run_cli("cites", str(contract), root)
+    assert "AMBIGUOUS" in result.stdout and "1 ambiguous" in result.stdout
+
+
+def test_cites_does_not_let_a_partial_path_match_a_longer_name(tmp_path):
+    """`ops/lease.go` must not match `.../issueops/lease.go`.
+
+    The suffix is anchored at a path separator. Matching on the raw string
+    would resolve a directory the contract never named.
+    """
+    root = _tree(tmp_path / "repo", {"internal/issueops/lease.go": 200})
+    contract = tmp_path / "factory.yaml"
+    contract.write_text(_minimal_contract_text() + "\n# ops/lease.go:99\n")
+    result = run_cli("cites", str(contract), root)
+    assert result.returncode == 1
+    assert "MISSING" in result.stdout and "ops/lease.go:99" in result.stdout
+
+
+def test_cites_blanks_an_uppercase_url_scheme_too():
+    """`HTTPS://host/path/x.go:77` fabricated a path, it did not miss one.
+
+    The lowercase-only guard let the scheme's own slashes start a match, so the
+    reported cite was `/example.com/path/internal.go:77` -- a path no contract
+    ever wrote. Cross-family review, 2026-08-19.
+    """
+    from src import cites as cites_mod
+    assert cites_mod.extract("# See HTTPS://example.com/path/internal.go:77\n") == []
+    assert cites_mod.extract("# See Https://example.com/a/b.go:77\n") == []
+    # The lowercase case keeps working, and a real cite beside a URL survives.
+    found = cites_mod.extract("# https://example.com/x see internal/a.go:12\n")
+    assert [c.raw for c in found] == ["internal/a.go:12"]
+
+
+def test_cites_stitches_a_single_hyphen_name_when_the_next_line_corroborates():
+    """`api-` + `service.go:120` is a real wrap the token cannot show alone."""
+    from src import cites as cites_mod
+    assert [c.raw for c in cites_mod.extract("# api-\n# service.go:120\n")] == [
+        "api-service.go:120"]
+    # Prose hyphenation does not stitch: the next line is not a filename and a
+    # line number, which is the entire corroboration.
+    assert [c.raw for c in cites_mod.extract("# well-\n# known in handler.go:9\n")] == [
+        "handler.go:9"]
+
+
+def test_cites_says_what_it_never_searched_when_a_file_is_not_found(tmp_path):
+    """"no such file under any root" was true and read as "deleted".
+
+    The indexer skips dot-directories, symlinks, vendored copies and nested
+    checkouts on purpose. A reader who knows the file exists needs the message
+    to name that, or the tool looks broken.
+    """
+    root = _tree(tmp_path / "repo", {".internal/worker.go": 40, "cmd/main.go": 5})
+    contract = tmp_path / "factory.yaml"
+    contract.write_text(_minimal_contract_text() + "\n# worker.go:10\n")
+    result = run_cli("cites", str(contract), root)
+    assert result.returncode == 1
+    assert "dot-directories" in result.stdout and "nested checkouts" in result.stdout
+
+
+def test_cites_names_the_file_each_inference_chose(tmp_path):
+    """An inference the reader cannot see is one they cannot disagree with.
+
+    A basename the contract pinned to one full path elsewhere still resolves to
+    that path when a different file of the same name was meant. Counting those
+    separately was the whole mitigation and it was invisible in the output.
+    """
+    root = _tree(tmp_path / "repo", {"first/main.go": 30, "second/main.go": 30})
+    contract = tmp_path / "factory.yaml"
+    contract.write_text(_minimal_contract_text()
+                        + "\n# first/main.go:5 and later main.go:20\n")
+    result = run_cli("cites", str(contract), root)
+    assert result.returncode == 0, result.stdout
+    assert "INFERRED" in result.stdout
+    assert "first/main.go" in result.stdout and "main.go:20" in result.stdout

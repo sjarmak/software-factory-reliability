@@ -13,10 +13,50 @@ Every command runs from a clean checkout with no install step.
 | `python3 src/factory_check.py init [target]` | writes a commented starter `factory.yaml` with `unknown` in every field it cannot decide for you; refuses to overwrite an existing file |
 | `python3 src/factory_check.py validate <files...>` | schema-validates contract, campaign, guarantee, effect, and work-manifest documents; reports a recognized document type with no schema as SKIP rather than checking it against a schema it was never written to satisfy |
 | `python3 src/factory_check.py review <file> [--strict] [--out DIR]` | runs the rule catalog below over one contract, prints FAIL findings before WARN findings, and writes `findings.json`; exits 1 on any FAIL, or on any WARN with `--strict` |
+| `python3 src/factory_check.py probes-init <installation> [--write FILE]` | scaffolds a probe pack by reading an installation, so `infer` has something to look for |
+| `python3 src/factory_check.py infer <installation> --probes FILE [--out DIR] [--write FILE]` | derives a contract from a real installation, leaving `unknown` in every field no scan can decide |
+| `python3 src/factory_check.py reconcile <file> <installation> --probes FILE` | holds a hand-written contract against the installation and reports DRIFT and UNDECLARED |
 | `python3 src/factory_check.py render <file> [--out DIR]` | renders diagrams and tables from one contract |
+| `python3 src/factory_check.py cites <file> <roots...>` | resolves every `path/to/file.go:120-130` reference in the contract's TEXT against one or more source roots; exits 1 when a cited file is absent or the line is past its end |
 
 `validate` answers "is this document well formed". `review` answers "does what
-it says leave a known failure boundary open". A contract can be perfectly
+it says leave a known failure boundary open". `cites` answers a third and
+narrower question: are the code references still pointing at files that exist.
+It reads the file as text rather than as parsed YAML, because almost every cite
+in a real contract lives in a comment and the loader throws comments away.
+
+What a green `cites` run does not say, and it prints this itself rather than
+leaving it to be assumed: that the cited line still says what the contract
+claims about it. A line-pinned claim invalidates its own refutation the moment
+anything above it moves, so nothing here can check that. It catches the file
+that was renamed, the path that was wrong when written, and the range that ran
+off the end -- the failures that survive review because a reader who opens the
+path and finds nothing assumes they typed it wrong.
+
+A citation is resolved four ways, in order: as a full path under a root; as a
+suffix of one, anchored at a separator, so `issueops/lease.go` finds the file at
+`internal/storage/issueops/lease.go`; as a bare name the contract itself pinned
+to exactly one full path somewhere else, which is printed as INFERRED with the
+file it chose because that reading rests on the document rather than on the
+code; and as a bare name with one hit in the index.
+
+Two limits it does not paper over. Citations wrapped across two comment lines
+are stitched back together, and prose ending in a directory can stitch into a
+citation nobody wrote (`# keep files under /tmp/` then `# cache.go:42` reports
+`/tmp/cache.go:42` as missing). That is a false finding on the line that
+produced it, and the alternative is silence about real broken citations, which
+is worse. And the index skips dot-directories, symlinks, vendored copies and
+subdirectories that are themselves git checkouts, so a file in one of those
+reports as not found; the message says so rather than implying a deletion.
+
+Bare basenames are how contracts are actually written. `cites` resolves one
+when exactly one file under the roots carries that name, or when the contract
+itself wrote the full path somewhere else and that path is unambiguous -- and
+counts that second kind separately, because it is an inference from the
+document rather than a reading of the code. When two files genuinely share the
+name it says AMBIGUOUS and does not fail: the contract is not wrong, the check
+cannot tell which was meant, and guessing would make a green run mean less than
+it says. A contract can be perfectly
 valid and fail eleven rules; the deliberately unsafe example in
 [`examples/`](../examples/) does exactly that.
 
