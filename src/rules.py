@@ -372,7 +372,14 @@ def _check_effects(doc, work, findings):
             findings.append(Finding(
                 "EFFECT-006", "FAIL",
                 f"Effect {name} is performed at {instructed} call site(s) that are agent instructions rather than code, so no static check can establish that those routes carry the identity; the declaration holds only where the code performs this effect.",
-                "Route the effect through a script the agent calls, so the identity is applied by code that can be checked rather than by an instruction whose arguments do not exist until run time.",
+                # Naming reconcile is not a cross-reference for tidiness. The
+                # remedy is "route these through a script", and review holds a
+                # count and no locations -- it is handed a contract and never
+                # an installation, so it cannot have them. reconcile reads the
+                # installation and prints the lines. Without this clause the
+                # reader is told to move something and left to find it, which
+                # is the defect this catalog has now shipped three times.
+                "Route the effect through a script the agent calls, so the identity is applied by code that can be checked rather than by an instruction whose arguments do not exist until run time. Run reconcile against the installation to list the lines; review is given no installation to read.",
                 f"{path}.instructed_call_sites"))
         if contract == "reconcile" and not _declared(effect.get("readback")):
             findings.append(Finding(

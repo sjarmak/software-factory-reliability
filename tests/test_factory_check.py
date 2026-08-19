@@ -212,6 +212,24 @@ def test_no_hint_is_built_from_contract_data():
           "flattens it. Add it to _COMPOSED_HINTS so the next one is noticed.")
 
 
+def test_effect_006_names_the_command_that_lists_the_instructed_lines(tmp_path):
+    """EFFECT-006's remedy is to move call sites, and review holds a count and
+    no locations: it is handed a contract and never an installation. The one
+    command that can list them has to be named, or the reader is told to move
+    something they cannot find."""
+    import yaml
+    doc = yaml.safe_load(UNSAFE.read_text())
+    doc["effects"][0]["instructed_call_sites"] = 7
+    contract = tmp_path / "instructed.yaml"
+    contract.write_text(yaml.safe_dump(doc))
+
+    run_cli("review", str(contract), "--out", str(tmp_path))
+    findings = json.loads((tmp_path / "findings.json").read_text())
+    hints = [f["hint"] for f in findings if f["rule"] == "EFFECT-006"]
+    assert len(hints) == 1, findings
+    assert "reconcile" in hints[0], hints[0]
+
+
 def test_review_unsafe_factory_findings(tmp_path):
     result = run_cli("review", str(UNSAFE), "--out", str(tmp_path))
     assert result.returncode == 1
