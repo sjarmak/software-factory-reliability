@@ -1056,9 +1056,9 @@ def cmd_cites(args):
 
     for status, label in (("missing", "MISSING"), ("out_of_range", "OUT OF RANGE")):
         for cite in buckets[status]:
-            print(f"{label} {path}:{cite.line_number}: {cite.raw} — {cite.detail}")
+            print(f"{label} {path}:{cite.line_number}: {cite.raw}; {cite.detail}")
     for cite in buckets["ambiguous"]:
-        print(f"AMBIGUOUS {path}:{cite.line_number}: {cite.raw} — {cite.detail}")
+        print(f"AMBIGUOUS {path}:{cite.line_number}: {cite.raw}; {cite.detail}")
 
     # Printed, not merely counted: each of these rests on a full path the
     # CONTRACT wrote somewhere else, not on anything at the cite itself, and a
