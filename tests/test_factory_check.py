@@ -943,8 +943,9 @@ def test_reconcile_calls_an_agents_only_effect_unverified_not_drift(tmp_path):
 def test_reconcile_contradicts_a_false_declared_instructed_count(tmp_path):
     """The check that stops the new field from being a self-clearing one.
 
-    EFFECT-006 fails on a nonzero instructed_call_sites, and review reads the
-    CONTRACT. So an author who does not want that finding writes 0 -- and
+        EFFECT-006 fails on an unreviewed positive instructed_call_sites count,
+        and review reads the CONTRACT. So an author who does not want that
+        finding can still write 0 -- and
     review goes green with the installation untouched, which is the hand-edit-
     the-declaration move this whole tool exists to catch, reintroduced by the
     field added to catch it. Only the scan can contradict it.
@@ -955,7 +956,9 @@ def test_reconcile_contradicts_a_false_declared_instructed_count(tmp_path):
     contract, probes, root = _lanes_install(tmp_path)
     contract.write_text(contract.read_text().replace(
         "    effect_identity: idempotency_key",
-        "    effect_identity: idempotency_key\n    instructed_call_sites: 0", 1))
+        "    effect_identity: idempotency_key\n"
+        "    instructed_call_sites: 0\n"
+        "    instructed_call_sites_reviewed: true", 1))
     out = run_cli("reconcile", str(contract), str(root), "--probes", str(probes))
     line = [l for l in out.stdout.splitlines() if l.startswith("STALE  slack_publish")]
     assert line, out.stdout
@@ -1470,11 +1473,9 @@ def test_a_decided_identity_with_instructed_sites_fails(tmp_path):
     prompt. The declaration is true of the code and the effect is still exposed:
     a retry through an instructed route can duplicate.
 
-    FAIL, not WARN. This was WARN for one release, on the argument that the
-    declaration is true and the remedy is a design change. Neither is a severity
-    argument -- the catalog defines FAIL as an open failure boundary, this is
-    one, and warnings do not fail a review without --strict, so the exposure
-    would have been reported by a green run.
+    FAIL, not WARN, until the exact lines have been reviewed. A positive count
+    with no review record is the first-detection state and must keep the review
+    command red.
 
     Mutation: drop the EFFECT-006 block from _check_effects, or set its severity
     back to WARN.
@@ -1494,7 +1495,47 @@ def test_a_decided_identity_with_instructed_sites_fails(tmp_path):
     findings = json.loads((tmp_path / "findings.json").read_text())
     entries = [f for f in findings if f["rule"] == "EFFECT-006"]
     assert entries and all(f["severity"] == "FAIL" for f in entries), entries
-    assert all(f["path"].endswith(".instructed_call_sites") for f in entries)
+    assert all(f["path"].endswith(".instructed_call_sites_reviewed")
+               for f in entries)
+
+
+def test_a_reviewed_instructed_count_is_a_fact_not_a_repeated_failure(tmp_path):
+    """A known prose route can be accepted without deleting the observation.
+
+    The count remains in the contract so reconcile can compare it with a fresh
+    scan. The separate boolean records the human review that review() itself
+    cannot infer. Omitting the boolean is still covered by the test above and
+    remains the first-detection failure.
+
+    Mutation: ignore instructed_call_sites_reviewed in _check_effects.
+    """
+    clean = ISSUE_TO_PR.read_text()
+    doc = tmp_path / "reviewed-instructed.yaml"
+    doc.write_text(clean.replace(
+        "    retry_contract: deduplicate",
+        "    instructed_call_sites: 7\n"
+        "    instructed_call_sites_reviewed: true\n"
+        "    retry_contract: deduplicate", 1))
+    result = run_cli("review", str(doc), "--out", str(tmp_path))
+    assert result.returncode == 0, result.stdout
+    assert "EFFECT-006" not in result.stdout, result.stdout
+
+
+def test_the_rendered_matrix_exposes_the_instruction_review(tmp_path):
+    """The artifact a reviewer reads must not hide why EFFECT-006 is absent."""
+    clean = ISSUE_TO_PR.read_text()
+    doc = tmp_path / "reviewed-instructed.yaml"
+    doc.write_text(clean.replace(
+        "    retry_contract: deduplicate",
+        "    instructed_call_sites: 7\n"
+        "    instructed_call_sites_reviewed: true\n"
+        "    retry_contract: deduplicate", 1))
+    run_cli("render", str(doc), "--out", str(tmp_path))
+    matrix = (tmp_path / "effect-matrix.md").read_text()
+    lines = [line for line in matrix.splitlines()
+             if "7 instructed call site(s)" in line]
+    assert lines, matrix
+    assert all("reviewed" in line.lower() for line in lines), lines
 
 
 def test_zero_instructed_sites_is_not_a_finding(tmp_path):

@@ -186,10 +186,12 @@ def effect_matrix(doc):
         lines.append("")
         for effect in instructed:
             lane = effect.get("code_lane_identity")
-            lines.append("- **%s** -> %s: %d instructed call site(s). %s" % (
+            reviewed = effect.get("instructed_call_sites_reviewed") is True
+            lines.append("- **%s** -> %s: %d instructed call site(s), %s. %s" % (
                 effect.get("name", "not declared"),
                 effect.get("destination", "not declared"),
                 effect["instructed_call_sites"],
+                "reviewed" if reviewed else "not recorded as reviewed",
                 ("The code that performs it carries `%s`." % lane)
                 if lane and lane != "unknown"
                 else "The code that performs it carries no single identity either."))

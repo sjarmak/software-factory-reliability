@@ -40,7 +40,11 @@
     "instructed_call_sites": {
       "type": "integer",
       "minimum": 0,
-      "description": "How many call sites for this effect are natural-language instructions to an agent rather than code. There is no argument list to read until an agent writes one at run time, so a static check can say nothing about whether those routes carry the identity -- which is NOT a claim that they omit it. Derived contracts record it because the alternative is to erase the difference between \"the code is unanimous and only the prompts are vague\" and \"the code does not do this at all\", which read identically once both collapse to unknown. Omitted means not measured, which is not the same as zero. This is an OBSERVATION, not a guarantee: review rule EFFECT-006 fails on any nonzero value, and reconcile compares a declared count against a fresh scan, so a hand-written 0 does not clear the finding."
+      "description": "How many call sites for this effect are natural-language instructions to an agent rather than code. There is no argument list to read until an agent writes one at run time, so a static check can say nothing about whether those routes carry the identity -- which is NOT a claim that they omit it. Derived contracts record it because the alternative is to erase the difference between \"the code is unanimous and only the prompts are vague\" and \"the code does not do this at all\", which read identically once both collapse to unknown. Omitted means not measured, which is not the same as zero. This is an OBSERVATION, not a guarantee: review rule EFFECT-006 fails a positive count until instructed_call_sites_reviewed is true, and reconcile always compares a declared count against a fresh scan, so neither a hand-written 0 nor an old review clears later drift."
+    },
+    "instructed_call_sites_reviewed": {
+      "type": "boolean",
+      "description": "True only after a human has read the instructed routes printed by reconcile and accepted the remaining prose-triggered effect boundary. This does not assert that static code binds those routes; it records the review so EFFECT-006 is a first-detection finding rather than a permanent penalty for written policy. The measured instructed_call_sites count remains mandatory evidence and reconcile continues to report STALE when a fresh scan disagrees. Derived contracts omit this field because a scanner cannot perform the review."
     },
     "duplicate_disposition": {
       "type": "string",

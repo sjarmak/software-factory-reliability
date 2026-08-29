@@ -193,9 +193,12 @@ instruction can name the flag, and often does.
 
 The narrower reading is recorded beside it rather than lost. `code_lane_identity`
 is what the code that performs the effect carries, and `instructed_call_sites`
-is how many routes are prose. Both are observations, never guarantees, and
-`reconcile` compares a declared value against a fresh scan, so writing
-`instructed_call_sites: 0` by hand does not clear the finding it produces.
+is how many routes are prose. Both are observations, never guarantees. A
+positive count first fires `EFFECT-006`. After reading the exact lines from
+`reconcile`, record `instructed_call_sites_reviewed: true` to accept the known
+prose-route boundary without deleting it. Reconcile still compares the count
+against a fresh scan, so writing `instructed_call_sites: 0` by hand does not
+clear the finding and a later count change makes an old review stale.
 
 Under each effect are up to two lists, and they ask for different work. The
 first names call sites missing the marker: those are edits. The second is

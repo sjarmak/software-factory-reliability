@@ -354,13 +354,11 @@ def _check_effects(doc, work, findings):
         # (an instruction can name the flag, and often does) but because there
         # is no argument list to read until run time.
         #
-        # FAIL, not WARN, and this was WARN for one release. The argument for
-        # WARN was that the declaration is true of the code. It is, and that is
-        # not the question the catalog asks: a route exists that performs an
-        # external mutation with no statically established identity discipline,
-        # so a retry through it can duplicate. That is an open failure
-        # boundary. "The remedy is a design change" is not a severity argument;
-        # several FAIL findings here need design changes.
+        # The first observation is a FAIL, not a permanent sentence. A human can
+        # read the exact lines reconcile prints and record that review without
+        # deleting the measured count. Reconcile keeps the declaration honest by
+        # comparing that count with every fresh scan: a new or removed route
+        # makes the contract STALE even after review.
         #
         # No _declared(effect_identity) guard. It used to have one, so an
         # effect with an undecided identity AND instructed routes reported only
@@ -368,10 +366,11 @@ def _check_effects(doc, work, findings):
         # defects with different remedies, one of them silent. Overlapping
         # effect findings are normal in this catalog.
         instructed = effect.get("instructed_call_sites")
-        if isinstance(instructed, int) and instructed > 0:
+        instructed_reviewed = effect.get("instructed_call_sites_reviewed") is True
+        if isinstance(instructed, int) and instructed > 0 and not instructed_reviewed:
             findings.append(Finding(
                 "EFFECT-006", "FAIL",
-                f"Effect {name} is performed at {instructed} call site(s) that are agent instructions rather than code, so no static check can establish that those routes carry the identity; the declaration holds only where the code performs this effect.",
+                f"Effect {name} is performed at {instructed} call site(s) that are agent instructions rather than code, and those routes have not been recorded as reviewed; no static check can establish that they carry the identity.",
                 # Naming reconcile is not a cross-reference for tidiness. The
                 # remedy is "route these through a script", and review holds a
                 # count and no locations -- it is handed a contract and never
@@ -379,8 +378,8 @@ def _check_effects(doc, work, findings):
                 # installation and prints the lines. Without this clause the
                 # reader is told to move something and left to find it, which
                 # is the defect this catalog has now shipped three times.
-                "Route the effect through a script the agent calls, so the identity is applied by code that can be checked rather than by an instruction whose arguments do not exist until run time. Run reconcile against the installation to list the lines; review is given no installation to read.",
-                f"{path}.instructed_call_sites"))
+                "Run reconcile against the installation to list the lines. Route real effect calls through a script where practical; after reading the remaining lines, set instructed_call_sites_reviewed: true without changing the measured count. A fresh reconcile still reports STALE if that count drifts.",
+                f"{path}.instructed_call_sites_reviewed"))
         if contract == "reconcile" and not _declared(effect.get("readback")):
             findings.append(Finding(
                 "EFFECT-004", "WARN",
